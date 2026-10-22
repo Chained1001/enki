@@ -73,6 +73,9 @@ export async function prepare({ input, out, json = false }) {
     join(outDir, '故事底本', '故事剧情', '卷纲'),
     join(outDir, '故事底本', '故事剧情', '幕纲'),
     join(outDir, '故事底本', '全书设定'),
+    join(outDir, '故事底本', '全书设定', '人物', '主角'),
+    join(outDir, '故事底本', '全书设定', '人物', '主要配角'),
+    join(outDir, '故事底本', '全书设定', '人物', '次要角色'),
   ]
   for (const d of dirs) await mkdir(d, { recursive: true })
 
