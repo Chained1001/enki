@@ -4,8 +4,7 @@
 
 ## 项目是什么
 
-小说拆书技能包，目前只有一个 ook-breakdown：把整本 txt 按章拆开，产出摘要与写作要素。通过 
-px skills add Chained1001/enki 安装。
+小说拆书技能包，目前只有一个 `book-breakdown`：把整本 txt 按章拆开，产出章节摘要与写作要素。通过 `npx skills add Chained1001/enki` 安装。
 
 ## 开始之前
 
@@ -54,7 +53,7 @@ px skills add Chained1001/enki 安装。
 |---|---|
 | 技能增删或改名 | `README.md` 的「技能列表」节 |
 | `package.json` 的 `version` | `CHANGELOG.md` 的版本段 |
-| TODO：改了什么 | TODO：同步到哪里 |
+| 新增或删除评测用例 | `evals/cases/` 下的用例与 `README.md` 的技能说明 |
 
 ## 验证
 
