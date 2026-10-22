@@ -54,6 +54,10 @@ test('prepare 建立产物树、复制原文、切章、写清单', async () => 
     assert.ok(existsSync(join(r.outDir, '故事底本', '全书设定', '人物', '主角')), '应有主角目录')
     assert.ok(existsSync(join(r.outDir, '故事底本', '全书设定', '人物', '主要配角')), '应有主要配角目录')
     assert.ok(existsSync(join(r.outDir, '故事底本', '全书设定', '人物', '次要角色')), '应有次要角色目录')
+    assert.ok(existsSync(join(r.outDir, '故事底本', '全书设定', '势力与组织', '门派')), '应有门派目录')
+    assert.ok(existsSync(join(r.outDir, '故事底本', '全书设定', '地点', '其他')), '应有地点其他目录')
+    assert.ok(existsSync(join(r.outDir, '故事底本', '全书设定', '物品', '武器')), '应有武器目录')
+    assert.ok(existsSync(join(r.outDir, '故事底本', '全书设定', '概念', '事件')), '应有事件目录')
 
     const chapterFiles = await readdir(join(r.outDir, '原文', '章节'))
     assert.equal(chapterFiles.length, 4)

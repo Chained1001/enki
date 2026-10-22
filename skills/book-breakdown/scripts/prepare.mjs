@@ -14,6 +14,15 @@ const CHAPTER = /^第[0-9一二三四五六七八九十百零]+章/
 const SPECIAL = /^(序章|楔子|尾声|后记)/
 const VOLUME = /^第[0-9一二三四五六七八九十百零]+卷/
 
+// 集合型设定：目录 → 分类子目录。与 PRD 的「产物结构」节和 契约 保持一致。
+export const COLLECTIONS = {
+  人物: ['主角', '主要配角', '次要角色'],
+  势力与组织: ['门派', '国家与政权', '家族', '商业与组织', '其他'],
+  地点: ['国家与区域', '城市与场所', '秘境与异空间', '其他'],
+  物品: ['武器', '法宝与道具', '材料与资源', '其他'],
+  概念: ['功法与能力', '规则与术语', '事件', '其他'],
+}
+
 export class UsageError extends Error {}
 
 export function detectChapters(text) {
@@ -73,9 +82,9 @@ export async function prepare({ input, out, json = false }) {
     join(outDir, '故事底本', '故事剧情', '卷纲'),
     join(outDir, '故事底本', '故事剧情', '幕纲'),
     join(outDir, '故事底本', '全书设定'),
-    join(outDir, '故事底本', '全书设定', '人物', '主角'),
-    join(outDir, '故事底本', '全书设定', '人物', '主要配角'),
-    join(outDir, '故事底本', '全书设定', '人物', '次要角色'),
+    ...Object.entries(COLLECTIONS).flatMap(([name, types]) =>
+      types.map((t) => join(outDir, '故事底本', '全书设定', name, t))
+    ),
   ]
   for (const d of dirs) await mkdir(d, { recursive: true })
 
