@@ -1,6 +1,7 @@
-// 实测《长安的荔枝》抓到的两个真缺陷（都是脚本与真实书稿对不上，而不是笔误）：
+// 实测《长安的荔枝》抓到的三个真缺陷（都是脚本与真实书稿对不上，而不是笔误）：
 //   1) write-rows 拒绝章号 0，而 prepare 在有前言时把前言记为 0 → 前言那行永远写不进去；
-//   2) 末章后跟一整段「文后说明」时，后记被算进末章正文（末章字数虚高、后记不进作者的话）。
+//   2) 末章后跟一整段「文后说明」时，后记被算进末章正文（末章字数虚高、后记不进作者的话）；
+//   3) W_QUOTE 按行报，真书 205 行缺引句在 49 个文件各报一次 → 全片报警、无辨别力（Q-30）。
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -8,6 +9,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { applyRows } from '../skills/book-breakdown/scripts/write-rows.mjs'
 import { prepare } from '../skills/book-breakdown/scripts/prepare.mjs'
+import { QUOTE_RULE } from '../skills/book-breakdown/scripts/contract.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const tmpBase = join(here, '.tmp', 'realbook')
@@ -95,4 +97,29 @@ test('末章后的「文后说明」不计入正文，且进入作者的话', as
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// W_QUOTE 口径（Q-30）：剔除「不写引句的行」后按文件密度报，而不是逐行报。
+test('引句口径把坐标行、否定式说明、分工说明排除在分母外', () => {
+  // 坐标行：使用记录 / 揭示节奏的写法，本身无引句可言
+  assert.ok(QUOTE_RULE.coordinate.test('第 1 章：金手指被授予（敕牒）'), '坐标行应被识别')
+  assert.ok(QUOTE_RULE.coordinate.test('第6章：达到顶点后立即归零'))
+  // 否定式：没有可引的原文
+  assert.ok(QUOTE_RULE.negativeBare.test('无独立金句'), '裸否定应被识别')
+  assert.ok(QUOTE_RULE.negativeValue.test('神态与动作锚：无（单章出场）'), '字段值为无应被识别')
+  assert.ok(QUOTE_RULE.negativeValue.test('力量/成长坐标：无成长弧'), '无成长弧应被识别')
+  // 分工说明：讲槽位归属，不是对本作的结论
+  assert.ok(QUOTE_RULE.dutyNote.test('地理图志：行程天数归地理图志（分工说明，见第 4 章）'))
+  // 反面：真正的引述型结论不得被误剔除
+  assert.ok(!QUOTE_RULE.negativeBare.test('他的弱点是只敢说到界限为止'))
+  assert.ok(!QUOTE_RULE.coordinate.test('卖符牒得九百九十六贯（第 2 章）'))
+  assert.ok(!QUOTE_RULE.dutyNote.test('卖符牒得九百九十六贯（第 2 章）'))
+})
+
+test('引句阈值为「条目≥3 且覆盖率<50%」，避免短卡与误报', () => {
+  assert.equal(QUOTE_RULE.minClaims, 3, '少于 3 条引述型条目的短卡不报')
+  assert.equal(QUOTE_RULE.minCoverage, 0.5, '覆盖率门槛 50%')
+  // 真书实测：按此口径 205 行警告收敛到 11 个文件
+  assert.ok(QUOTE_RULE.coordinateSections.includes('揭示节奏'), '揭示节奏段整段不查引句')
+  assert.ok(QUOTE_RULE.coordinateSections.includes('使用记录'), '使用记录段整段不查引句')
 })

@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  COLLECTIONS, COLUMNS, ENUMS, PROTAGONIST_FILES, SECTIONS, SOURCE_CLAIM_LABELS, SOURCE_META_LABELS,
+  COLLECTIONS, COLUMNS, ENUMS, PROTAGONIST_FILES, QUOTE_PATTERN, SECTIONS, SOURCE_CLAIM_LABELS, SOURCE_META_LABELS,
   SOURCE_PATTERN, THRESHOLDS, TOPICS, tableColumns,
 } from '../skills/book-breakdown/scripts/contract.mjs'
 
@@ -114,6 +114,27 @@ test('出处格式接受枚举、区间与幕（龙族1 卡壳修复回归）', 
   }
   for (const bad of ['无出处', '某章']) {
     assert.ok(!SOURCE_PATTERN.test(bad), `应拒绝：${bad}`)
+  }
+})
+
+test('出处区间的连接符认 en dash 与全角短横（真书实测回归）', () => {
+  // 《长安的荔枝》实测：模板写「第 2–5 章」时被判缺出处，改写成「第 2 至 5 章」才过。
+  // en dash 是中文排版最常见的区间符，必须认。
+  for (const good of ['第 2–5 章', '第 2－5 章', '第 2—5 章', '第 2~5 章', '第 2-5 章', '第 2 至 5 章', '第 0–6 幕']) {
+    assert.ok(SOURCE_PATTERN.test(good), `应接受区间连接符：${good}`)
+  }
+  // 反向：不能因为放宽连接符就吞掉无章号的写法
+  for (const bad of ['第 2 到 5 章', '第几章', '第 2 段']) {
+    assert.ok(!SOURCE_PATTERN.test(bad), `不该误判为出处：${bad}`)
+  }
+})
+
+test('引句正则要求引号内至少两字（防空引号与单字引号冒充引句）', () => {
+  for (const good of ['（「荔枝鲜」）', '（“一日色变”）', '『甲乙』']) {
+    assert.ok(QUOTE_PATTERN.test(good), `应认作引句：${good}`)
+  }
+  for (const bad of ['（「」）', '（“”）', '（「十」）', '（“一”）']) {
+    assert.ok(!QUOTE_PATTERN.test(bad), `不该认作引句：${bad}`)
   }
 })
 

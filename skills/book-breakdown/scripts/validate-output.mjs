@@ -10,8 +10,8 @@ import { join, relative, resolve, sep } from 'node:path'
 import { IoError, readManifest } from './io.mjs'
 import { pathToFileURL } from 'node:url'
 import {
-  COLLECTIONS, ENUMS, QUOTE_PATTERN, SECTIONS, SOURCE_META_LABELS, SOURCE_PATTERN, THRESHOLDS, VARIABLE_FILE_RULES,
-  productPlan, tableColumns,
+  COLLECTIONS, ENUMS, QUOTE_PATTERN, QUOTE_RULE, SECTIONS, SOURCE_META_LABELS, SOURCE_PATTERN, THRESHOLDS,
+  VARIABLE_FILE_RULES, productPlan, tableColumns,
 } from './contract.mjs'
 
 const USAGE = '用法：validate-output.mjs <产物目录> [--mode deliver|progress] [--json] [--help]'
@@ -402,8 +402,10 @@ export async function validateOutput({ root, mode = 'deliver' }) {
     }
   }
 
-  // 出处（A-14）：只查条目行（列表项）。错误＝缺章号，警告＝缺引句。仅交付模式且已填写的文件。
+  // 出处（A-14）：只查条目行（列表项）。错误＝缺章号，警告＝引句密度不足。仅交付模式且已填写的文件。
   // 表格行不查：弧清单/索引等表格自带章号列，另由人工抽查（A-19）兜底。
+  // 引句按文件密度报（Q-30）：真书实测按行报会在 49 个文件各报一次，等于全片报警、无辨别力。
+  // 坐标行、否定式说明、分工说明与坐标段（揭示节奏/使用记录等）不进分母，见 contract.mjs 的 QUOTE_RULE。
   if (mode === 'deliver') {
     const excluded = ['索引.md', '人物关系.md', '伏笔台账.md', '文风.md', '作者的话.md', '分卷总表.md']
     for (const { rel, full } of actual) {
@@ -413,9 +415,13 @@ export async function validateOutput({ root, mode = 'deliver' }) {
       if (text.includes('（待填）')) continue
       if (rel.startsWith('故事底本/全书设定/专题/') && topicVerdict(text) === '本题材不涉及') continue
       let missing = 0
-      let noQuote = 0
+      let claims = 0
+      let quoted = 0
+      let section = ''
       const samples = []
       for (const line of text.split(/\r?\n/)) {
+        const h = /^#{2,3}\s+(.+?)\s*$/.exec(line.trim())
+        if (h) { section = h[1]; continue }
         const t = line.trim()
         if (!t.startsWith('-')) continue
         const body = t.replace(/^-\s*/, '').trim()
@@ -423,11 +429,22 @@ export async function validateOutput({ root, mode = 'deliver' }) {
         // 元行（判定的结论与指向、模板字段标签行）不是待出处的结论；依据行自带出处照常检查。
         if (/^(判定|指向|金手指名称)：/.test(body) || SOURCE_META_LABELS.test(body)) continue
         if (/^(名称|姓名|别称|类别|类型|性质|归属|层级|据点|位置|编号|原型词|功能位|主名|实体类型|立场|首次出场|结局|定位|所属区域|一句话世界|一句话定义|对象|对象A|对象B|幕号与幕名|起止章|卷号与卷名|卷名来源|弧名|时段|章数|字数)：/.test(body)) continue
-        if (!SOURCE_PATTERN.test(t)) { missing++; if (samples.length < 3) samples.push(body.slice(0, 40)) }
-        else if (!QUOTE_PATTERN.test(t)) noQuote++
+        if (!SOURCE_PATTERN.test(t)) { missing++; if (samples.length < 3) samples.push(body.slice(0, 40)); continue }
+        // 不该有引句的行：不进口径，既不进分母也不报缺
+        if (QUOTE_RULE.negativeBare.test(body) || QUOTE_RULE.negativeValue.test(body)) continue
+        if (QUOTE_RULE.coordinate.test(body)) continue
+        if (QUOTE_RULE.coordinateSections.includes(section)) continue
+        if (QUOTE_RULE.dutyNote.test(body)) continue
+        claims += 1
+        if (QUOTE_PATTERN.test(t)) quoted += 1
       }
       if (missing) fail('E_SOURCE', rel, `${missing} 条结论缺「第 N 章」出处。示例：${samples.join('；')}`)
-      if (noQuote) warn('W_QUOTE', rel, `${noQuote} 条结论缺原文引句（概括性结论行允许引句在同文件他行，抽读时核对）`)
+      if (claims >= QUOTE_RULE.minClaims) {
+        const coverage = quoted / claims
+        if (coverage < QUOTE_RULE.minCoverage) {
+          warn('W_QUOTE', rel, `${claims} 条引述型结论中仅 ${quoted} 条带原文引句（${Math.round(coverage * 100)}% < ${Math.round(QUOTE_RULE.minCoverage * 100)}%），抽读时核对`)
+        }
+      }
     }
   }
 
