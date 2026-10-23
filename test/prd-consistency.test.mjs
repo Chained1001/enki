@@ -6,7 +6,7 @@
 // 若 PRD 没写某个数字，也报错——强迫写清楚，不能靠留空绕过。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { COLUMNS, SECTIONS } from '../skills/book-breakdown/scripts/contract.mjs'
@@ -14,6 +14,7 @@ import { COLUMNS, SECTIONS } from '../skills/book-breakdown/scripts/contract.mjs
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
 const prdPath = join(root, 'docs', '产品', 'PRD.md')
+const wfDir = join(root, 'skills', 'book-breakdown', 'workflows')
 
 const readPrd = () => readFile(prdPath, 'utf8')
 
@@ -148,4 +149,30 @@ test('PRD 含主流程图与异常状态图（mermaid）', async () => {
   assert.ok(kinds.includes('flowchart'), `缺主流程图（flowchart），实际图类型：${kinds.join('/')}`)
   assert.ok(kinds.includes('stateDiagram') || kinds.includes('stateDiagram-v2'), `缺异常状态图（stateDiagram），实际：${kinds.join('/')}`)
   assert.ok(kinds.includes('sequenceDiagram'), `缺并行合并时序图（sequenceDiagram），实际：${kinds.join('/')}`)
+})
+
+test('workflows/ 里提到的列数/段数也须与 contract 一致', async () => {
+  // 同一类漂移的第三个受害点：07-卷循环.md 曾有 2 处「十一列」（逐章记录实为 12 列）。
+  // workflows 是 agent 实际执行的说明书，写错列数会让 agent 少填一列。
+  const files = (await readdir(wfDir)).filter((f) => f.endsWith('.md'))
+  const actual = {
+    逐章记录: COLUMNS['逐章记录'].length,
+    伏笔台账: COLUMNS['伏笔台账'].length,
+    分卷总表: COLUMNS['分卷总表'].length,
+  }
+  for (const f of files) {
+    const text = await readFile(join(wfDir, f), 'utf8')
+    for (const [name, n] of Object.entries(actual)) {
+      for (const m of text.matchAll(/(\d+|[一二三四五六七八九十]{1,2})\s*列/g)) {
+        // 只在「产物名」出现在同一行时才算声明
+        const lineStart = text.lastIndexOf('\n', m.index) + 1
+        const lineEnd = text.indexOf('\n', m.index)
+        const line = text.slice(lineStart, lineEnd < 0 ? undefined : lineEnd)
+        if (!line.includes(name)) continue
+        const claimed = /^\d+$/.test(m[1]) ? Number(m[1]) : CN[m[1]]
+        if (!claimed) continue
+        assert.equal(claimed, n, `${f} 说${name}是 ${claimed} 列，contract 实际 ${n} 列`)
+      }
+    }
+  }
 })
