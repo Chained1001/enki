@@ -284,6 +284,18 @@ test('dry-run 不落盘', async () => {
   })
 })
 
+test('dry-run 也返回 totalChars（CLI 摘要要打印它，缺了就印空）', async () => {
+  await withDir('prepare-dry-total', async ({ dir }) => {
+    const src = await writeSample(dir, '干跑书.txt', SAMPLE)
+    const dry = await prepare({ input: src, dryRun: true })
+    assert.equal(typeof dry.totalChars, 'number', 'dry-run 必须给 totalChars')
+    assert.ok(dry.totalChars > 0)
+    // 与正式运行的结果一致：不能只在落盘路径算字数
+    const real = await prepare({ input: src })
+    assert.equal(dry.totalChars, real.totalChars, 'dry-run 与正式运行的 totalChars 必须相等')
+  })
+})
+
 test('重入：不覆盖已有文件，源变更被拒，--force 归档重建', async () => {
   await withDir('prepare-resume', async ({ dir }) => {
     const src = await writeSample(dir, '续跑书.txt', SAMPLE)

@@ -131,14 +131,25 @@ export function detectChapters(text) {
     })
   })
 
+  // 后记块切分（实测《长安的荔枝》抓到的形态）：末章正文后跟一整段「文后说明」，
+  // 它不是章节（不该进章节表、也不该把末章字数抬高），而是作者的话。
+  // 处理：章内遇到后记标题行，其后所有行一律归入作者的话，不再计入正文。
+  const AFTERWORD_HEAD = /^[（(]?(?:文后说明|后记|作者附记|创作谈|附录说明)[）)]?$/
+
   // 章内噪音剥离：正文、附注、字数（按去空白字符计）；乱码行（替换符/mojibake 对）直接丢弃计数。
   for (const c of chapters) {
     const kept = []
     const notes = []
     c.garbled = 0
+    let afterwordFrom = -1
     for (let i = c.start; i < c.end; i++) {
       const line = lines[i]
       if (i === c.start && c.isHeading) continue // 标题行不进正文
+      if (afterwordFrom < 0 && AFTERWORD_HEAD.test(line.trim())) {
+        afterwordFrom = i
+        c.afterwordLines = c.end - i
+      }
+      if (afterwordFrom >= 0) { (c.afterword ??= []).push(line.trim()); continue }
       const kind = classifyNoise(line)
       if (kind === '广告水印' || kind === '本章完标记' || kind === '更新预告' || kind === '番外公告') continue
       if (kind === '作者话' || kind === '结构附注') { notes.push(line.trim()); continue }
@@ -414,7 +425,8 @@ function authorNotesText(notes) {
   const kept = []
   let droppedCount = 0
   for (const n of notes) {
-    if (isStructureNote(n.text)) kept.push(n)
+    // 后记块整块已由标题行确认，直接保留——否则短段落会被单行规则误判丢弃。
+    if (n.afterword || isStructureNote(n.text)) kept.push(n)
     else droppedCount++
   }
   for (const n of kept) buckets[bucketNote(n.text)].push(`- ${n.ch === '附录' ? '【附录】' : `【第${n.ch}章】`}${n.text}`)
@@ -605,7 +617,11 @@ export async function analyze({ input, out }) {
   }
   const volumes = detectVolumes(chapters, lines)
   const fp = fingerprint(chapters)
-  const notes = chapters.flatMap((c) => c.notes.map((t) => ({ ch: c.no, text: t })))
+  const notes = chapters.flatMap((c) => [
+    ...c.notes.map((t) => ({ ch: c.no, text: t })),
+    // 后记块：整块已由标题行确认，直接纳入，不再按单行规则筛（否则短段落会被丢弃）。
+    ...(c.afterword ?? []).filter(Boolean).map((t) => ({ ch: c.no, text: t, afterword: true })),
+  ])
   if (appendix) for (const t of appendix.notes) notes.push({ ch: '附录', text: t })
   const { plan, files } = buildArtifacts({ book, chapters, volumes, bookType, fp, notes })
   const batches = planBatches(chapters, volumes)
@@ -670,6 +686,8 @@ export async function persist(analysis, { force = false, dryRun = false } = {}) 
   if (dryRun) {
     return {
       action: 'dry-run', outDir, book, bookType, encoding, chapterCount: chapters.length,
+      // totalChars 必须一起返回：CLI 摘要会打印它，缺了就印出空值（实测《长安的荔枝》--dry-run 时空着）
+      totalChars: chapters.reduce((n, c) => n + (c.chars ?? 0), 0),
       volumeCount: volumes.length, volumes, batchCount: batches.length, archived,
       dirs: plan.dirs.length, files: files.size + chapters.length + 1,
     }

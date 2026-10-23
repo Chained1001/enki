@@ -68,9 +68,21 @@ export function mergeCost(cost, { stage, input, output, mode = 'record', calls =
 // 确定性下界：阶段 4 必须把全书读一遍，故输入不可能低于 totalChars/tokensPerChar。
 // 输出下界＝非原文产物文件的字符数折算（正文产物都是 agent 写出来的）。
 export function lowerBound(manifest, productCharCount, charsPerToken = CHARS_PER_TOKEN) {
+  // 全书不可能不被读完，但「读完」跨阶段 3 与阶段 4：阶段 3 读开篇前三章，
+  // 阶段 4 读其余（含重读）。所以下界应落在「阶段 3+4 合计」，而不是只压在阶段 4 上。
+  // 实测《长安的荔枝》抓到的误报：阶段 3 读 1 章全文、阶段 4 读余下 5 章，
+  // 两阶段合计 54.1K 恰好等于全书，但旧规则要求阶段 4 单独 ≥54.1K，必然报警。
   const readAll = Math.round((manifest.totalChars ?? 0) / charsPerToken)
+  const openingUnits = Math.max(1, Math.min(3, manifest.chapterCount ?? 3))
+  const openingChars = Math.round(
+    (manifest.chapters ?? [])
+      .slice(0, openingUnits)
+      .reduce((n, c) => n + (c.chars ?? 0), 0),
+  )
+  const openingTokens = Math.round(openingChars / charsPerToken)
   return {
-    阶段4输入下界: readAll,
+    阶段4输入下界: Math.max(0, readAll - openingTokens),
+    阶段3与4合计下界: readAll,
     输出下界: Math.round((productCharCount ?? 0) / charsPerToken),
   }
 }
@@ -179,7 +191,7 @@ async function main() {
       process.exit(1)
     }
     console.log('尚未记录任何用量。')
-    console.log(`确定性下界（供核对）：阶段 4 至少读全书一次 ≈ 输入 ${fmt(lb.阶段4输入下界)}；产物输出 ≈ ${fmt(lb.输出下界)}`)
+    console.log(`确定性下界（供核对）：阶段 4 输入 ≥ ${fmt(lb.阶段4输入下界)}（全书扣掉阶段 3 已读的开篇，合计 ≥ ${fmt(lb.阶段3与4合计下界)}）；产物输出 ≈ ${fmt(lb.输出下界)}`)
     console.log('记录方式：node cost.mjs <产物目录> --record --stage 4 --in 37500 --out 1200')
     return
   }
@@ -195,7 +207,7 @@ async function main() {
   if (lb.阶段4输入下界 > 0 && s4 < lb.阶段4输入下界) {
     warnings.push(
       `W_COST_UNDER：阶段 4 上报输入 ${fmt(s4)} 低于确定性下界 ${fmt(lb.阶段4输入下界)}` +
-        `（全书 ${manifest.totalChars} 字，读一遍不可能更少）——疑似漏记`,
+        `（全书 ${manifest.totalChars} 字，阶段 3 已读开篇、阶段 4 还需读余下部分，不可能更少）——疑似漏记`,
     )
   }
 
@@ -216,7 +228,7 @@ async function main() {
   }
   console.log(`| — | **合计** | ${cost.total.calls} | **${fmt(cost.total.in)}** | **${fmt(cost.total.out)}** | 100% |`)
   console.log('')
-  console.log(`确定性下界（核对用）：阶段 4 输入 ≥ ${fmt(lb.阶段4输入下界)}；产物输出 ≥ ${fmt(lb.输出下界)}`)
+  console.log(`确定性下界（核对用）：阶段 4 输入 ≥ ${fmt(lb.阶段4输入下界)}（阶段 3+4 合计 ≥ ${fmt(lb.阶段3与4合计下界)}）；产物输出 ≥ ${fmt(lb.输出下界)}`)
   if (warnings.length) {
     console.log('')
     for (const w of warnings) console.log(`⚠ ${w}`)

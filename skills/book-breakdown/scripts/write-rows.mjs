@@ -72,7 +72,9 @@ export function applyRows(lines, entries, { partial = false, enums = ENUMS } = {
   const seen = new Set()
   for (const e of entries) {
     const no = Number(e.章号)
-    if (!Number.isInteger(no) || no < 1) throw new RowError('E_CHAPTER', `章号「${e.章号}」不是正整数`)
+    // 章号 0 是合法的：prepare 在有前言时把前言记为 0、正文从 1 起。
+    // 只禁负数与非整数（曾写成 no < 1，导致「有前言的书」前言那行永远写不进去）。
+    if (!Number.isInteger(no) || no < 0) throw new RowError('E_CHAPTER', `章号「${e.章号}」不是非负整数`)
     if (seen.has(no)) throw new RowError('E_DUP', `输入里章号 ${no} 重复`)
     seen.add(no)
     if (!byChapter.has(no)) throw new RowError('E_CHAPTER', `逐章记录里没有第 ${no} 章的行`)

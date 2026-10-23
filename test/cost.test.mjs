@@ -69,10 +69,52 @@ test('mergeCost：record 累加、set 覆盖，total 始终等于各阶段之和
   assert.equal(c.total.in, sum, 'total 必须等于各阶段之和')
 })
 
-test('lowerBound：阶段 4 输入下界＝全书字符数折算，输出下界按非原文产物字符数', () => {
+test('lowerBound：阶段 4 下界＝全书减去阶段 3 已读开篇，输出下界按非原文产物字符数', () => {
+  // 无 chapters 明细时退化为「全书即阶段 4 下界」，同时给出合计下界。
   const lb = lowerBound({ totalChars: 1600 }, 3200)
-  assert.equal(lb.阶段4输入下界, 1000)
+  assert.equal(lb.阶段3与4合计下界, 1000)
+  assert.equal(lb.阶段4输入下界, 1000, '拿不到章节明细时保守取全书')
   assert.equal(lb.输出下界, 2000)
+})
+
+test('lowerBound：有章节明细时扣掉阶段 3 读的开篇三章（真书实测抓到的误报）', () => {
+  // 《长安的荔枝》形状：7 章含前言，全书 86596 字，阶段 3 读前言+前两章。
+  // 旧规则要求阶段 4 单独 ≥54123，实测只有 41268，必然误报 W_COST_UNDER。
+  const chapters = [
+    { no: 0, chars: 283 },
+    { no: 1, chars: 12427 },
+    { no: 2, chars: 14872 },
+    { no: 3, chars: 14315 },
+    { no: 4, chars: 13079 },
+    { no: 5, chars: 14550 },
+    { no: 6, chars: 17070 },
+  ]
+  const totalChars = chapters.reduce((n, c) => n + c.chars, 0)
+  const lb = lowerBound({ totalChars, chapterCount: 7, chapters }, 0)
+  const readAll = Math.round(totalChars / 1.6)
+  assert.equal(lb.阶段3与4合计下界, readAll)
+  assert.ok(lb.阶段4输入下界 < readAll, '阶段 4 下界必须小于全书，否则阶段 3 白读了')
+  // 阶段 3 读开篇三章（前言 283 + 12427 + 14872 = 27582 字）
+  const openingTokens = Math.round((283 + 12427 + 14872) / 1.6)
+  assert.equal(lb.阶段4输入下界, readAll - openingTokens)
+  // 实测阶段 4 报 41268，不得触发下界告警
+  assert.ok(41268 >= lb.阶段4输入下界, '实测 41.3K 应高于新下界，不该再报 W_COST_UNDER')
+})
+
+test('lowerBound：合计下界始终守住「全书必被读完」，与章节数无关', () => {
+  // 单章书：阶段 3 读开篇即读完全书，阶段 4 下界可降到 0，
+  // 但「合计 ≥ 全书」这条不变量必须始终成立——它才是真正的护栏。
+  const one = lowerBound({ totalChars: 1600, chapterCount: 1, chapters: [{ no: 1, chars: 1600 }] }, 0)
+  assert.equal(one.阶段3与4合计下界, 1000)
+  assert.equal(one.阶段4输入下界, 0, '单章书阶段 3 已读全，阶段 4 无强制下限')
+
+  // 多章书：合计下界不变，阶段 4 下界为正
+  const many = lowerBound(
+    { totalChars: 16000, chapterCount: 10, chapters: Array.from({ length: 10 }, (_, i) => ({ no: i + 1, chars: 1600 })) },
+    0,
+  )
+  assert.equal(many.阶段3与4合计下界, 10000)
+  assert.equal(many.阶段4输入下界, 7000, '10 章里阶段 3 读前 3 章，阶段 4 下界为后 7 章')
 })
 
 test('CLI：未记录时 --check 退出 1（无计量即不通过，符合 M-06）', () => {
@@ -105,11 +147,13 @@ test('CLI：记录后 --report 出表，--check 退出 0', () => {
 test('CLI：上报值低于确定性下界时给 W_COST_UNDER 警告', () => {
   const dir = makeProduct()
   try {
-    // fixture 全书 233 字 → 阶段 4 下界 146；报 10 必然低于下界
+    // fixture 全书 233 字 → 合计下界 146；报 10 必然低于下界
     runScript([dir, '--set', '--stage', '4', '--in', '10', '--out', '1'])
     const r = runScript([dir, '--report'])
     assert.match(r.stdout, /W_COST_UNDER/)
-    assert.match(r.stdout, /读一遍不可能更少/)
+    assert.match(r.stdout, /阶段 3 已读开篇、阶段 4 还需读余下部分/)
+    // 报告须同时给出两个下界，供人核对「合计是否够读一遍全书」
+    assert.match(r.stdout, /阶段 3\+4 合计/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
