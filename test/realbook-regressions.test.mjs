@@ -9,7 +9,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { applyRows } from '../skills/book-breakdown/scripts/write-rows.mjs'
 import { prepare } from '../skills/book-breakdown/scripts/prepare.mjs'
-import { QUOTE_RULE } from '../skills/book-breakdown/scripts/contract.mjs'
+import { detectBookType } from '../skills/book-breakdown/scripts/prepare.mjs'
+import { QUOTE_RULE, THRESHOLDS } from '../skills/book-breakdown/scripts/contract.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const tmpBase = join(here, '.tmp', 'realbook')
@@ -132,3 +133,40 @@ test('引句阈值为「条目≥3 且覆盖率<50%」，避免短卡与误报',
   assert.ok(QUOTE_RULE.coordinateSections.includes('揭示节奏'), '揭示节奏段整段不查引句')
   assert.ok(QUOTE_RULE.coordinateSections.includes('使用记录'), '使用记录段整段不查引句')
 })
+
+// 第四个真缺陷（真书实测，八本书的判定对照）：
+//   4) 出版书判定是「章数 < 30 且 均章 > 15,000」的双条件，章数一票否决把
+//      《龙族3·黑月之潮》（58 章、均章 19,517 字）判成网文，而同套的龙族 1/2
+//      （11 章、21 章）判成出版。三者同一版式，却因章数分叉走两条产物路径：
+//      网文多生成 分卷总表.md 与 卷纲/，出版不生成（见 productPlan）。
+//      八本实测书的均章分布：网文 2,171–14,386，出版 19,517–23,900，
+//      间隙 14,386→19,517 把阈值 15,000 整个包住 —— 章数本不该参与。
+test('出版书判定只看均章：章数不该一票否决（龙族3 实测）', () => {
+  // 龙族3 形态：58 章、均章 19,517 字 —— 修前判成网文
+  assert.equal(detectBookType(chaptersOf(58, 19517)), '出版', '章数 58 但均章 19,517 应判出版')
+  // 同套前两册，修前后都应是出版
+  assert.equal(detectBookType(chaptersOf(11, 23900)), '出版')
+  assert.equal(detectBookType(chaptersOf(21, 19663)), '出版')
+  // 网文侧四本，均章远低于阈值
+  assert.equal(detectBookType(chaptersOf(438, 6325)), '网文')
+  assert.equal(detectBookType(chaptersOf(916, 4097)), '网文')
+  assert.equal(detectBookType(chaptersOf(1078, 2837)), '网文')
+  assert.equal(detectBookType(chaptersOf(1028, 2171)), '网文')
+  // 长安的荔枝：6 章正文、均章 14,386 字，刚好低于阈值 —— 仍是网文
+  assert.equal(detectBookType(chaptersOf(6, 14386)), '网文', '均章 14,386 未过线')
+})
+
+test('出版书判定保留章数硬顶，防均章虚高被误判', () => {
+  // 均章过线但章数离谱（千章书不可能是出版书）
+  assert.equal(detectBookType(chaptersOf(1200, 16000)), '网文', '章数超硬顶仍按网文')
+  // 边界：恰好等于硬顶时降级，略低于时判出版
+  assert.equal(detectBookType(chaptersOf(THRESHOLDS.出版书章数硬顶, 16000)), '网文')
+  assert.equal(detectBookType(chaptersOf(THRESHOLDS.出版书章数硬顶 - 1, 16000)), '出版')
+  // 无章节时兜底为网文，不抛错
+  assert.equal(detectBookType([]), '网文')
+})
+
+// 造 chapters：n 章（无前言），每章 chars 字
+function chaptersOf(n, chars) {
+  return Array.from({ length: n }, (_, k) => ({ no: k + 1, title: `第${k + 1}章`, chars }))
+}

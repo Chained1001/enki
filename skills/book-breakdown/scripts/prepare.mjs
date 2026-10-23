@@ -316,12 +316,20 @@ function fixVolumes(vols, chapters) {
     .map((v, k) => ({ ...v, no: k + 1 }))
 }
 
+// 出版 vs 网文（F-18）。判据只看均章字数：八本实测书里均章是唯一能把两类
+// 干净分开的一维（网文 2,171–14,386，出版 19,517–23,900，间隙 14,386→19,517
+// 宽过阈值 15,000）。此处曾经是「章数 < 30 且 均章 > 15,000」的双条件，
+// 章数一票否决把《龙族3·黑月之潮》（58 章、均章 19,517）判成网文，
+// 而它和同套的龙族 1/2 是同一版式——三册跑出两种产物目录树
+// （网文多分卷总表与卷纲），对照验收时对不上。
+// 章数只保留一个防极端硬顶：均章达标但章数离谱（千章书）仍按网文。
 export function detectBookType(chapters) {
   const units = chapters.filter((c) => !(c.no === 0 && c.title === '前言'))
   if (units.length === 0) return '网文'
   const avg = units.reduce((s, c) => s + c.chars, 0) / units.length
-  if (units.length < THRESHOLDS.出版书章数上限 && avg > THRESHOLDS.出版书均章字数下限) return '出版'
-  return '网文'
+  if (avg <= THRESHOLDS.出版书均章字数下限) return '网文'
+  if (units.length >= THRESHOLDS.出版书章数硬顶) return '网文'
+  return '出版'
 }
 
 // ---------- 定量指纹（F-21，脚本生成；七项＝五项＋场景切换密度＋情绪标签词密度，Q-22）----------
