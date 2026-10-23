@@ -25,6 +25,11 @@ const PLACEHOLDER = '（待填）'
 
 // 把一格「出场人物」拆成实体名。分隔符：顿号、逗号、斜杠、分号。
 // 「多视角（甲／乙）」这类写法先去壳再拆，避免把「多视角」当人名。
+//
+// 括号里的分隔符不算分隔符：真书实测《长安的荔枝》写过
+// 「长安至广州（灞桥、商州道、鄱阳湖、梅关、广州）」，是「一条路线 + 五个途经点」，
+// 旧实现把括号内的顿号也当分隔，切出「长安至广州（灞桥」和「广州）」两个假实体，
+// 地名索引因此多出 4 行脏数据。现在只在括号外拆，括号内整体保留。
 export function splitEntities(cell) {
   if (!cell) return []
   let s = String(cell).trim()
@@ -32,10 +37,32 @@ export function splitEntities(cell) {
   // 去「多视角（…）」外壳，保留括号里的名字
   const wrapped = /^多视角[（(](.+)[）)]$/.exec(s)
   if (wrapped) s = wrapped[1]
-  return s
-    .split(/[、，,／/;；]/)
-    .map((x) => x.trim())
-    .filter((x) => x && x !== PLACEHOLDER)
+  return splitTopLevel(s)
+}
+
+// 只按「括号外」的分隔符切分；括号内的分隔符不算，括号随名字保留。
+export function splitTopLevel(s) {
+  const out = []
+  let buf = ''
+  let depth = 0
+  for (const ch of String(s)) {
+    const isOpen = ch === '（' || ch === '('
+    const isClose = ch === '）' || ch === ')'
+    if (isOpen) depth += 1
+    else if (isClose) depth = Math.max(0, depth - 1)
+
+    // 括号外的分隔符：收一段
+    if (depth === 0 && !isClose && /[、，,／/;；]/.test(ch)) {
+      const seg = buf.trim()
+      if (seg) out.push(seg)
+      buf = ''
+      continue
+    }
+    buf += ch
+  }
+  const tail = buf.trim()
+  if (tail) out.push(tail)
+  return out.map((x) => x.trim()).filter((x) => x && x !== PLACEHOLDER)
 }
 
 // 纯函数：给定表行，返回 { 实体名 → {类型, 章号[], 首现章, 末次章} }

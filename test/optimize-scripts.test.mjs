@@ -150,6 +150,16 @@ test('entity-index：拆分出场人物，去「多视角」外壳', () => {
   assert.deepEqual(splitEntities(''), [])
 })
 
+test('entity-index：括号内的分隔符不切分（真书实测的路线写法）', () => {
+  // 《长安的荔枝》第 2 章地点写「长安至广州（灞桥、商州道、…、广州）」，
+  // 是一条路线的括注。旧实现把括号内顿号也当分隔符，切出
+  // 「长安至广州（灞桥」与「广州）」两个假实体，地名索引因此多出 4 行脏数据。
+  const route = '长安至广州（灞桥、商州道、鄱阳湖、梅关、广州）'
+  assert.deepEqual(splitEntities(route), [route], '括号内整体保留，不拆')
+  assert.deepEqual(splitEntities('甲（乙、丙）、丁'), ['甲（乙、丙）', '丁'], '括号外仍要拆')
+  assert.deepEqual(splitEntities('大庾岭天开路、长安招福寺'), ['大庾岭天开路', '长安招福寺'])
+})
+
 test('entity-index：首现章/末次章/类型正确，占位行不参与索引', () => {
   const lines = table(4, {
     1: ['甲', '车站', '甲、乙', '事1', '主线', '无', '扬', '悬念', '小'],
