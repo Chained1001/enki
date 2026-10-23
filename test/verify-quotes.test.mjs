@@ -399,6 +399,62 @@ test('非坐标字段的长引句必须照常核验：「说话风格与人设�
 
 // ---------- 契约常量（D-01 单一机器源）----------
 
+test('作者的话是合法引用来源：里面的原话不应被判「全书找不到」（Q-32）', async () => {
+  // 真书实测盲区：prepare 把前言/后记归集到 原文/作者的话.md，它不在 manifest 章节清单里，
+  // 旧版完全不读，作者原话一律被判找不到。长安的荔枝的「我本来只打算写四章」就是这么被误判的。
+  const dir = await makeProduct([
+    '- 作者自述：原文写「我本来只打算写四章。但她看完第一章 后，断言这个体量没六章不能尽兴」（第 1 章）',
+  ])
+  try {
+    await mkdir(join(dir, '原文'), { recursive: true })
+    await writeFile(join(dir, '原文', '作者的话.md'),
+      '## 作者的话\n\n- 【第1章】我本来只打算写四章。但她看完第一章 后，断言这个体量没六章不能尽兴\n', 'utf8')
+    const result = await verifyQuotes({ root: dir })
+    assert.equal(result.data.notFound, 0, '作者的话里的原话不应被判找不到')
+    // 该句不在第 1 章正文里，只存在于作者的话，故判 wrong-chapter（引句真、但不在该章正文）——
+    // 关键是它没有落在 not-found，说明作者的话确实参与了全量查找。
+    assert.equal(result.data.wrongChapter, 1, '应判章号不符而非全书找不到')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('散文行引句进统计通道：能回源计入 pass，找不到列存疑但不阻断（Q-31）', async () => {
+  // 真书实测盲区：旧版只扫「-」列表行，129 行散文里的 169 条引句从未被检查。
+  // 但散文引号多为强调而非逐字引用，按列表行口径判失败会一次报出 8 条误报，
+  // 故本通道只统计＋提示，不改 ok 与退出码。
+  const dir = await makeProduct([
+    '- 结论行：张三在此登场（第1章）',
+    '',
+    '这是一段散文，里面引了原文一句「我们所做的事情，我们已经做了整整二十年」（第1章）。',
+    '',
+    '这一段的自拟长句「谁都没想到事情最后会变成这个样子」，原文里并不存在（第1章）。',
+  ])
+  try {
+    const result = await verifyQuotes({ root: dir })
+    assert.equal(result.data.prose.total, 2, '两条散文引句都要进统计')
+    assert.equal(result.data.prose.pass, 1, '能回源的那条计入 pass')
+    assert.equal(result.data.prose.suspect, 1, '找不到的那条记为存疑')
+    assert.equal(result.ok, true, '存疑是提示项，不得影响通过判定')
+    assert.match(result.data.prose.items[0].quote, /谁都没想到事情最后会变成这个样子/, '存疑项要列出原文供人工核对')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('散文行没有章号时不进统计（无出处无法定位，交给 validate-output 的 E_SOURCE）', async () => {
+  const dir = await makeProduct([
+    '- 结论行：张三在此登场（第1章）',
+    '',
+    '这段散文有引句「我们所做的事情，我们已经做了整整二十年」但没有标章号。',
+  ])
+  try {
+    const result = await verifyQuotes({ root: dir })
+    assert.equal(result.data.prose.total, 0, '没有章号的散文行不归本脚本判')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
 test('QUOTE_VERIFY 的取值锁死为实测口径，改动会被这条抓住', () => {
   // 期望值硬编码为字面量（评审 P21 的口径）：从契约自身推导期望＝漂移不可见。
   assert.equal(QUOTE_VERIFY.术语长度上限, 10)

@@ -462,3 +462,79 @@ test('W_ARC_REF：幕纲弧号在卷纲弧清单中不存在时命中、存在�
     assert.deepEqual(green.errors, [], '弧号存在时不应有任何问题')
   })
 })
+
+// ---------- 真书实测缺陷回归（龙族1：13.2 万字出版书跑通时暴露） ----------
+
+// 缺陷 1：集合目录与索引同时为空时「0 行 = 0 文件」自洽通过，整个集合零产出也判通过。
+// 真书实测：5 张集合索引可以全是空表、实体卡一个不建，交付校验照样通过——「设定库没做」等于没做检查。
+// 修法：每个集合至少要有一张卡；索引行数必须与卡片数相等（这条原本就有，缺的是「不许 0」）。
+test('E_INDEX：集合整体为空（索引 0 行且无卡片）时报错', async () => {
+  await withFilled(async (out) => {
+    const idxRel = '故事底本/全书设定/势力与组织/索引.md'
+    const cardRel = '故事底本/全书设定/势力与组织/门派/青云门.md'
+    await writeFile(join(out, idxRel), tableFile('势力索引', '集合索引', []), 'utf8')
+    await rm(join(out, cardRel))
+
+    const r = await validateOutput({ root: out })
+    assert.ok(
+      r.errors.some((e) => e.code === 'E_INDEX' && e.file === idxRel && /空/.test(e.message)),
+      '集合零产出必须报错，不能让「索引空 + 卡片空」互相抵账通过',
+    )
+    await writeFile(join(out, idxRel), tableFile('势力索引', '集合索引', [
+      ['青云门', '门派', '主要', '第1章', '故事底本/全书设定/势力与组织/门派/青云门.md'],
+    ]), 'utf8')
+    await writeFile(join(out, cardRel), '# 青云门\n\n- 结构职能：青云门是门派（第 1 章）。\n', 'utf8')
+  })
+})
+
+// 缺陷 2：模板里的段标题行写成「- 规则与边界：」（冒号后留空、子条目另起一行），
+// 该标签不在 SOURCE_META_LABELS 白名单里，被当成「缺出处的结论」报 E_SOURCE。
+// 真书实测：8 张概念卡全部命中，而它们其实每条子条目都带了章号。
+test('E_SOURCE：值为空的「- 段标题：」行不应被判为缺出处的结论', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/概念/事件/初遇.md'
+    const card = [
+      '# 初遇',
+      '',
+      '- 名称：初遇',
+      '- 一句话定义：两人在车站第一次相遇。',
+      '- 规则与边界：',
+      '  - 只在车站发生（第 1 章）。',
+      '  - 触发条件是李四主动搭话（第 1 章）。',
+      '',
+    ].join('\n')
+    await writeFile(join(out, rel), card, 'utf8')
+    const r = await validateOutput({ root: out })
+    const hit = r.errors.filter((e) => e.code === 'E_SOURCE' && e.file === rel)
+    assert.deepEqual(hit, [], '值为空的段标题行是结构，不是待出处的结论')
+  })
+})
+
+// 缺陷 3：W_QUOTE 号称「按文件密度」，但分母 claims 只累计「-」开头的列表行。
+// 把同一批结论改写成散文段落即可让分母归零、警告消失——门槛可被格式规避。
+test('W_QUOTE：散文段落里的结论也进覆盖率分母（不能靠改写格式绕开）', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/概念/事件/初遇.md'
+    // 4 条结论，全部以散文段落写出、全部带章号、全部不带引句 → 覆盖率 0，应报 W_QUOTE。
+    const prosy = [
+      '# 初遇',
+      '',
+      '- 名称：初遇',
+      '',
+      '两人在车站第一次相遇，李四主动搭话（第 1 章）。',
+      '',
+      '这次相遇决定了后面所有同行（第 2 章）。',
+      '',
+      '王五在场但没有说话（第 3 章）。',
+      '',
+      '车站此后成为反复出现的地点（第 5 章）。',
+      '',
+    ].join('\n')
+    await writeFile(join(out, rel), prosy, 'utf8')
+    const r = await validateOutput({ root: out })
+    assert.ok(
+      r.errors.some((e) => e.code === 'W_QUOTE' && e.file === rel),
+      '散文写法的引述型结论必须进分母，否则改格式就能抹掉警告',
+    )
+  })
+})

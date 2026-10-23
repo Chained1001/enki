@@ -34,7 +34,11 @@ const HELP = `${USAGE}
   3  环境缺失（产物目录不存在、缺 工作/manifest.json、原文/章节/ 不可读）
 
 算法要点：
-  扫描范围：只扫 故事底本/ 下的 .md，只看以「-」开头的列表行（结论行）。
+  扫描范围：扫 故事底本/ 下的 .md，分两条通道。
+  ① 结论行（以「-」开头的列表行）：判定三档，参与 ok 与退出码。
+  ② 散文行（非列表、非标题/引用/表格，且带「第 N 章」）：能回源的计入 pass，
+     找不到的只列「存疑」作提示，不参与 ok 与退出码——散文里的引号多为强调而非逐字引用，
+     按列表行口径判会大量误报（两本真书实测 8 条误报）。
   坐标字段行：字段名属于「幕号与幕名、起止章、卷号与卷名、卷名来源、弧名、章数、字数、时段、
              名称、姓名、主名、别称、别称与马甲、标题、对象、对象A、对象B、定位、判定、指向」的行，
              这些字段的值是名称/标题/编号，其引号多为幕名、章名、别名而不是原文引句。
@@ -187,6 +191,18 @@ export async function verifyQuotes({ root, maxFindings = DEFAULT_MAX_FINDINGS } 
   // 全书串：各章归一后拼接（归一已删空白，拼接不引入边界字符）。
   const bookText = [...chapterText.entries()].sort((a, b) => a[0] - b[0]).map(([, t]) => t).join('')
 
+  // 作者的话（Q-32）：prepare 会把正文里的前言/后记归集到 原文/作者的话.md，它是合法的引用来源，
+  // 但不在 manifest 的章节清单里，旧版完全不读——作者原话一律被判「全书找不到」。
+  // 真书实测：长安的荔枝的「我本来只打算写四章…」出自作者的话，却被判成自拟短语。
+  // 只并入 bookText（全书兜底查找），不并入任何章的 declaredText（它没有章号，不该让某章背这口锅）。
+  let authorNoteText = ''
+  try {
+    authorNoteText = stripPunct(await readFile(join(root, '原文', '作者的话.md'), 'utf8'))
+  } catch {
+    authorNoteText = '' // 没有该文件是正常情况（多数书没有作者的话）
+  }
+  const bookTextWithNote = bookText + authorNoteText
+
   const docsDir = join(root, '故事底本')
   let docsStat
   try {
@@ -207,6 +223,10 @@ export async function verifyQuotes({ root, maxFindings = DEFAULT_MAX_FINDINGS } 
   let skippedTerms = 0
   let skippedMeta = 0
   const found = []
+  // 散文行通道（Q-31）：非列表行里带章号的引句。只统计、不判失败——原因见下方注释。
+  let proseTotal = 0
+  let prosePass = 0
+  const proseSuspect = []
 
   let files
   try {
@@ -227,7 +247,32 @@ export async function verifyQuotes({ root, maxFindings = DEFAULT_MAX_FINDINGS } 
     const lines = text.split(/\r?\n/)
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim()
-      if (!line.startsWith('-')) continue // 只看结论行（列表行），格式问题由 validate-output 管
+      if (!line.startsWith('-')) {
+        // 散文行（Q-31）：不是列表行，但内容是一整句带章号的结论，同样会带引句。
+        // 旧版直接跳过，导致「把结论写成散文」成为引句核验的盲区（真书实测：129 行 169 条引句从未被检查）。
+        // 但散文里的引号大多是**强调**而非逐字引用（「规则失效」「一个不得志的诗人朋友」），
+        // 若按列表行的口径判失败，两本真书会一次报出 8 条误报、把信号淹掉。
+        // 故此处只做两件事：① 能回源的计入 prosePass（说明这段散文引的是真原文）；
+        // ② 找不到的记为「存疑」列出，供人工看，不阻断退出码。
+        if (!line || line.startsWith('#') || line.startsWith('>') || line.startsWith('|')) continue
+        const proseQuotes = quotesInLine(line)
+        if (!proseQuotes.length) continue
+        const proseChapters = chaptersInLine(line)
+        if (!proseChapters.length) continue
+        for (const quote of proseQuotes) {
+          if (isTermQuote(quote)) continue
+          const segments = validSegments(quote)
+          if (!segments.length) continue
+          proseTotal++
+          const declaredText = proseChapters.map((no) => chapterText.get(no) ?? '').join('')
+          if (segments.every((seg) => declaredText.includes(seg)) || segments.every((seg) => bookTextWithNote.includes(seg))) {
+            prosePass++
+            continue
+          }
+          proseSuspect.push({ file: `故事底本/${rel}`, line: i + 1, chapters: proseChapters, quote })
+        }
+        continue
+      }
       const quotes = quotesInLine(line)
       if (!quotes.length) continue
       const chapters = chaptersInLine(line)
@@ -245,7 +290,7 @@ export async function verifyQuotes({ root, maxFindings = DEFAULT_MAX_FINDINGS } 
         total++
         const declaredText = chapters.map((no) => chapterText.get(no) ?? '').join('')
         if (segments.every((seg) => declaredText.includes(seg))) { pass++; continue }
-        const bucket = segments.every((seg) => bookText.includes(seg)) ? 'wrong-chapter' : 'not-found'
+        const bucket = segments.every((seg) => bookTextWithNote.includes(seg)) ? 'wrong-chapter' : 'not-found'
         if (bucket === 'wrong-chapter') wrongChapter++
         else notFound++
         found.push({ file: `故事底本/${rel}`, line: i + 1, chapters, quote, bucket })
@@ -264,6 +309,13 @@ export async function verifyQuotes({ root, maxFindings = DEFAULT_MAX_FINDINGS } 
       files: scannedFiles,
       truncated: found.length - items.length,
       items,
+      // 散文行通道：proseSuspect 只作提示，不参与 ok 判定与退出码。
+      prose: {
+        total: proseTotal,
+        pass: prosePass,
+        suspect: proseSuspect.length,
+        items: proseSuspect.slice(0, maxFindings),
+      },
     },
   }
 }
@@ -287,6 +339,13 @@ function humanReport(d) {
     }
   }
   if (d.truncated > 0) out.push(`（仅列出前 ${d.items.length} 条问题，共 ${d.wrongChapter + d.notFound} 条，完整计数见上）`)
+  // 散文行通道（Q-31）：只报数，不改判定——散文引号多为强调，误报率高，交由人工看。
+  if (d.prose?.total) {
+    out.push(`散文行引句：${d.prose.total} 条，可回源 ${d.prose.pass}，存疑 ${d.prose.suspect}（提示项，不阻断）`)
+    for (const it of d.prose.items) {
+      out.push(`  [存疑] ${it.file}:${it.line} 第${it.chapters.join('、')}章「${it.quote}」`)
+    }
+  }
   out.push(`结论：${d.wrongChapter + d.notFound ? '不通过' : '通过'}`)
   return out.join('\n')
 }

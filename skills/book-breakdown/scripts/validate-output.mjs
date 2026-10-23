@@ -311,7 +311,11 @@ export async function validateOutput({ root, mode = 'deliver' }) {
     }
     const rowsN = table?.rows.length ?? 0
     indexInfo[name] = { rows: table?.rows ?? [], count, files: count }
-    if (table && rowsN !== count) {
+    // 集合零产出必须报错：卡片数与索引行数都为 0 时「相等」是空转，等于「设定库这一块没做」也能过交付。
+    // 真书实测：5 张集合索引全空、实体卡一个不建，交付校验照样通过。
+    if (count === 0 && rowsN === 0) {
+      fail('E_INDEX', rel, `集合「${name}」为空：索引 0 行且没有任何条目卡，至少建一张卡并登记一行`)
+    } else if (table && rowsN !== count) {
       fail('E_INDEX', rel, `索引 ${rowsN} 行，条目文件 ${count} 个，应为相等（主角一行计一文件夹）`)
     }
     for (const r of table?.rows ?? []) {
@@ -423,11 +427,29 @@ export async function validateOutput({ root, mode = 'deliver' }) {
         const h = /^#{2,3}\s+(.+?)\s*$/.exec(line.trim())
         if (h) { section = h[1]; continue }
         const t = line.trim()
-        if (!t.startsWith('-')) continue
+        // 散文段落也是结论的常见写法（Q-30 跟进）：原文里「把结论写成散文」能绕开覆盖率分母。
+        // 但散文里混着两类东西，不能一视同仁：
+        //   ① 引述型结论（「血统等级是总纲…」）——该配原文引句，进分母；
+        //   ② 叙述型摘要（编号事件链「1. 芝加哥火车站…」、幕定位/幕目标这类概述）——本身就是缩写，
+        //      要求每条嵌原文引句只会逼出凑数的硬引，不进分母（真书实测：幕02 有 12 条编号事件链，
+        //      若全进分母会把覆盖率从 42% 压低到 26%，而问题并不在这些行）。
+        if (!t.startsWith('-')) {
+          if (!t || t.startsWith('>') || t.startsWith('|') || t.startsWith('#')) continue
+          if (!SOURCE_PATTERN.test(t)) continue
+          if (QUOTE_RULE.叙述型散文.test(t)) continue
+          if ([...t.replace(/[\s\p{P}]/gu, '')].length < QUOTE_RULE.散文最短结论长度) continue
+          if (QUOTE_RULE.coordinateSections.includes(section)) continue
+          claims += 1
+          if (QUOTE_PATTERN.test(t)) quoted += 1
+          continue
+        }
         const body = t.replace(/^-\s*/, '').trim()
         if (!body || body === '无' || body === '（待填）') continue
         // 元行（判定的结论与指向、模板字段标签行）不是待出处的结论；依据行自带出处照常检查。
         if (/^(判定|指向|金手指名称)：/.test(body) || SOURCE_META_LABELS.test(body)) continue
+        // 值为空的段标题行（「- 规则与边界：」冒号后留空、子条目另起一行）是结构不是结论。
+        // 真书实测：概念卡用这个写法，标签不在白名单里，8 张卡全被判缺出处，而子条目其实逐条带了章号。
+        if (/^[^：:]{1,20}[：:]\s*$/.test(body)) continue
         if (/^(名称|姓名|别称|类别|类型|性质|归属|层级|据点|位置|编号|原型词|功能位|主名|实体类型|立场|首次出场|结局|定位|所属区域|一句话世界|一句话定义|对象|对象A|对象B|幕号与幕名|起止章|卷号与卷名|卷名来源|弧名|时段|章数|字数)：/.test(body)) continue
         if (!SOURCE_PATTERN.test(t)) { missing++; if (samples.length < 3) samples.push(body.slice(0, 40)); continue }
         // 不该有引句的行：不进口径，既不进分母也不报缺
