@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 静态校验 skills/ 的目录结构、frontmatter 与本地引用。只用 Node 内置模块。
+// 静态校验 skills/ 的目录结构、frontmatter、本地引用与 README 技能表。只用 Node 内置模块。
 // 用法：validate.mjs [路径] [--json] [--help]
 // 退出码：0 通过，1 校验失败，2 参数错误。
 import { existsSync, statSync } from 'node:fs'
@@ -9,6 +9,9 @@ import { pathToFileURL } from 'node:url'
 
 const USAGE = '用法：validate.mjs [路径] [--json] [--help]'
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+// 与 规范/03-命名.md 的保留名清单一致，改一处须同次改另一处。
+const RESERVED_NAMES = new Set(['skills', 'docs', 'templates', 'scripts', 'test', 'evals', 'examples', 'node_modules'])
+// 与 规范/01 的 frontmatter 两表一致：前六个是 agentskills 规范键，后三个是宿主扩展键。
 const KNOWN_KEYS = new Set([
   'name', 'description', 'license', 'compatibility', 'metadata', 'allowed-tools',
   'whenToUse', 'disable-model-invocation', 'user-invocable',
@@ -16,6 +19,8 @@ const KNOWN_KEYS = new Set([
 const BOOLEAN_KEYS = ['disable-model-invocation', 'user-invocable']
 const BOOLEAN_WORDS = new Set(['true', 'false', 'yes', 'no', 'on', 'off', '1', '0'])
 const MAX_BODY_LINES = 500
+// 宿主上下文压缩后只重附技能文件前 20000 字符（Claude Code 官方文档），超限内容在余下会话丢失。
+const MAX_SKILL_CHARS = 20000
 const MAX_DESCRIPTION = 1024
 const MAX_COMPATIBILITY = 500
 
@@ -28,6 +33,7 @@ function unquote(value) {
 }
 
 export function parseFrontmatter(text) {
+  text = text.replace(/^\uFEFF/, '') // 容 UTF-8 BOM（评审 P14）：带 BOM 的 SKILL.md 不应误报缺 frontmatter
   const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text)
   if (!match) return { error: '缺少 frontmatter：文件开头须为 --- 包裹的 YAML 块' }
   const fields = {}
@@ -70,6 +76,7 @@ export function localLinks(body) {
 export function checkSkillText(dirName, text, file = `skills/${dirName}/SKILL.md`) {
   const errors = []
   const fail = (code, message) => errors.push({ code, file, message })
+  text = text.replace(/^﻿/, '') // BOM 统一在入口剥（评审 P14）
   const parsed = parseFrontmatter(text)
   if (parsed.error) {
     fail('E_FRONTMATTER', parsed.error)
@@ -90,6 +97,8 @@ export function checkSkillText(dirName, text, file = `skills/${dirName}/SKILL.md
     }
     if (name !== dirName) fail('E_NAME_MISMATCH', `name "${name}" 与目录名 "${dirName}" 不一致`)
   }
+
+  if (RESERVED_NAMES.has(dirName)) fail('E_NAME_RESERVED', `"${dirName}" 是保留名，不得用作技能目录名，见 docs/规范/03-命名.md`)
 
   const description = fields.description ?? ''
   const descriptionLength = [...description].length
@@ -114,6 +123,9 @@ export function checkSkillText(dirName, text, file = `skills/${dirName}/SKILL.md
 
   const lines = body.replace(/\r?\n$/, '').split(/\r?\n/).length
   if (lines > MAX_BODY_LINES) fail('E_BODY_LINES', `正文 ${lines} 行，超过 ${MAX_BODY_LINES} 行，请拆到 workflows/ 或 references/`)
+
+  const chars = [...text].length
+  if (chars > MAX_SKILL_CHARS) fail('E_BODY_SIZE', `SKILL.md 全文 ${chars} 字符，超过 ${MAX_SKILL_CHARS}（宿主压缩后只重附前 ${MAX_SKILL_CHARS} 字符），请拆到 workflows/ 或 references/`)
 
   return errors
 }
@@ -155,8 +167,14 @@ async function checkSkillLinks(skillDir, rel) {
     const body = name === 'SKILL.md' ? (parseFrontmatter(text).body ?? text) : text
     const at = `${rel}/${name}`
     for (const target of localLinks(body)) {
-      // 只查技能内部引用。仓库级路径不属于技能内容，不在技能内解析。
-      if (/^(?:docs|evals|templates|skills)\//.test(target)) continue
+      // docs/ 不随技能安装下发（00-总则 原则 4）：技能内引用它，安装用户拿到的是悬空指针。
+      // 这条曾经靠 `continue` 永久豁免，问题不会被门禁发现，故单列为错误。
+      if (/^docs\//.test(target)) {
+        errors.push({ code: 'E_LINK', file: at, message: `技能内不得引用 docs/（docs 不随技能安装下发）：${target}` })
+        continue
+      }
+      // 其余仓库级路径不属于技能内容，不在技能内解析。
+      if (/^(?:evals|templates|skills)\//.test(target)) continue
       const abs = resolve(dirname(file), target)
       if (!abs.startsWith(root + sep)) {
         errors.push({ code: 'E_LINK', file: at, message: `引用路径越出技能目录：${target}` })
@@ -177,6 +195,7 @@ export async function validateRepo(root) {
     return [{ code: 'E_NO_SKILLS_DIR', file: 'skills/', message: 'skills/ 不是目录，请改为目录并放入技能' }]
   }
   const errors = []
+  const skillNames = []
   for (const entry of await readdir(skillsDir, { withFileTypes: true })) {
     const rel = `skills/${entry.name}`
     if (entry.isFile()) {
@@ -186,6 +205,7 @@ export async function validateRepo(root) {
       continue
     }
     if (!entry.isDirectory()) continue
+    skillNames.push(entry.name)
 
     const skillDir = join(skillsDir, entry.name)
     const skillFile = join(skillDir, 'SKILL.md')
@@ -211,6 +231,19 @@ export async function validateRepo(root) {
     if (!entry.isDirectory()) continue
     errors.push(...(await checkWorkflows(join(skillsDir, entry.name), `skills/${entry.name}`)))
   }
+
+  // README 技能表是使用者发现技能的入口，技能增删后最容易漏同步（约定，脚本检查）。
+  // 只认表格行（首列为技能名）：散文顺带提及不算入索引，否则这条检查形同虚设。
+  const readme = join(root, 'README.md')
+  if (existsSync(readme)) {
+    const readmeText = (await readFile(readme, 'utf8')).replace(/^\uFEFF/, '')
+    for (const name of skillNames) {
+      const safeName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      if (!new RegExp(`^\\|\\s*${safeName}\\s*\\|`, 'm').test(readmeText)) {
+        errors.push({ code: 'E_INDEX', file: 'README.md', message: `未提及技能 ${name}，请更新技能列表` })
+      }
+    }
+  }
   return errors
 }
 
@@ -227,6 +260,8 @@ export function checkWorkflowFiles(entries, file = 'workflows/') {
       errors.push({ code: 'E_WORKFLOW_ORDER', file: `${file}${name}`, message: '流程文件名须为 NN-中文名.md' })
       continue
     }
+    // init-skill 生成的骨架文件名是 NN-TODO.md，内容补全后忘改名不算完成。
+    if (name.includes('TODO')) errors.push({ code: 'E_PLACEHOLDER', file: `${file}${name}`, message: '流程文件名仍含 TODO，请改为正式中文名' })
     seen.push(Number(match[1]))
   }
   seen.sort((a, b) => a - b)
@@ -260,6 +295,8 @@ export function parseArgs(argv) {
     if (arg === '--json') options.json = true
     else if (arg === '--help' || arg === '-h') options.help = true
     else if (arg.startsWith('--')) throw new Error(`未知参数 ${arg}。${USAGE}`)
+    // 以 - 开头的一律按未知参数拒绝（含单短横与单独的 -），不支持把 - 或 -x 之类当路径。
+    else if (arg.startsWith('-')) throw new Error(`未知参数 ${arg}。以 - 开头的输入会被当成参数，路径不能用 - 开头。${USAGE}`)
     else positional.push(arg)
   }
   if (positional.length > 1) throw new Error(`多余的参数 ${positional.slice(1).join(' ')}。${USAGE}`)
@@ -272,7 +309,11 @@ async function main() {
   try {
     options = parseArgs(process.argv.slice(2))
   } catch (error) {
-    console.error(error.message)
+    if (process.argv.includes('--json')) {
+      console.log(JSON.stringify({ ok: false, errors: [{ code: error.code ?? 'E_ARGS', file: '', message: error.message }], data: {} }, null, 2))
+    } else {
+      console.error(error.message)
+    }
     process.exitCode = 2
     return
   }

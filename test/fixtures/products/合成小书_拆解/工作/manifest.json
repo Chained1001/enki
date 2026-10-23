@@ -1,0 +1,145 @@
+{
+  "book": "合成小书",
+  "bookType": "网文",
+  "source": {
+    "path": "合成小书.txt",
+    "bytes": 803,
+    "encoding": "utf-8",
+    "sha256": "8fdcef7b4cf2ded5276e782237a467c88caa8329ef86d9c4c329b0e03d472c5f"
+  },
+  "outDir": "合成小书_拆解",
+  "totalChars": 233,
+  "chapterCount": 5,
+  "volumeCount": 1,
+  "volumes": [
+    {
+      "no": 1,
+      "name": "全书",
+      "startCh": 1,
+      "endCh": 5,
+      "basis": "无卷信号"
+    }
+  ],
+  "noise": {
+    "garbledLines": 0
+  },
+  "chapters": [
+    {
+      "no": 1,
+      "rawNo": 1,
+      "title": "第一章 车站",
+      "chars": 48,
+      "file": "0001-第一章 车站.txt"
+    },
+    {
+      "no": 2,
+      "rawNo": 2,
+      "title": "第二章 行李",
+      "chars": 50,
+      "file": "0002-第二章 行李.txt"
+    },
+    {
+      "no": 3,
+      "rawNo": 3,
+      "title": "第三章 检票",
+      "chars": 46,
+      "file": "0003-第三章 检票.txt"
+    },
+    {
+      "no": 4,
+      "rawNo": 4,
+      "title": "第四章 误点",
+      "chars": 46,
+      "file": "0004-第四章 误点.txt"
+    },
+    {
+      "no": 5,
+      "rawNo": 5,
+      "title": "第五章 发车",
+      "chars": 43,
+      "file": "0005-第五章 发车.txt"
+    }
+  ],
+  "batches": [
+    {
+      "volumeNo": 1,
+      "batch": 1,
+      "startCh": 1,
+      "endCh": 5,
+      "status": "pending"
+    }
+  ],
+  "stages": [
+    {
+      "id": 0,
+      "name": "路径询问",
+      "status": "done"
+    },
+    {
+      "id": 1,
+      "name": "输入校验",
+      "status": "done"
+    },
+    {
+      "id": 2,
+      "name": "预处理与初始化",
+      "status": "done"
+    },
+    {
+      "id": 3,
+      "name": "口径锚定",
+      "status": "pending"
+    },
+    {
+      "id": 4,
+      "name": "卷循环",
+      "status": "pending"
+    },
+    {
+      "id": 5,
+      "name": "设定库",
+      "status": "pending"
+    },
+    {
+      "id": 6,
+      "name": "全书层",
+      "status": "pending"
+    },
+    {
+      "id": 7,
+      "name": "校验与交付",
+      "status": "pending"
+    }
+  ],
+  "files": {
+    "原文/合成小书.txt": "done",
+    "原文/章节/0001-第一章 车站.txt": "done",
+    "原文/章节/0002-第二章 行李.txt": "done",
+    "原文/章节/0003-第三章 检票.txt": "done",
+    "原文/章节/0004-第四章 误点.txt": "done",
+    "原文/章节/0005-第五章 发车.txt": "done",
+    "故事底本/全书设定/专题/力量体系.md": "skeleton",
+    "故事底本/全书设定/专题/成长与资源体系.md": "skeleton",
+    "故事底本/全书设定/专题/历史年表.md": "skeleton",
+    "故事底本/全书设定/专题/地理图志.md": "skeleton",
+    "故事底本/全书设定/专题/时代参照层.md": "skeleton",
+    "故事底本/全书设定/专题/规则与铁则.md": "skeleton",
+    "故事底本/故事剧情/全书大纲.md": "skeleton",
+    "故事底本/故事剧情/伏笔台账.md": "skeleton",
+    "故事底本/故事剧情/开篇三章.md": "skeleton",
+    "故事底本/全书设定/世界观.md": "skeleton",
+    "故事底本/全书设定/金手指.md": "skeleton",
+    "故事底本/文风.md": "skeleton",
+    "原文/作者的话.md": "filled",
+    "工作/别名词典.md": "skeleton",
+    "工作/逐章记录.md": "skeleton",
+    "故事底本/全书设定/人物/索引.md": "skeleton",
+    "故事底本/全书设定/势力与组织/索引.md": "skeleton",
+    "故事底本/全书设定/地点/索引.md": "skeleton",
+    "故事底本/全书设定/物品/索引.md": "skeleton",
+    "故事底本/全书设定/概念/索引.md": "skeleton",
+    "故事底本/全书设定/人物/人物关系.md": "skeleton",
+    "故事底本/故事剧情/分卷总表.md": "skeleton",
+    "故事底本/故事剧情/卷纲/卷01-全书.md": "skeleton"
+  }
+}

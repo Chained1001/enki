@@ -67,6 +67,19 @@ test('正文超过 500 行报 E_BODY_LINES，500 行通过', () => {
   assert.deepEqual(codes(checkSkillText('sample', tooLong)), ['E_BODY_LINES'])
 })
 
+// 行数压在 500 行内、只超体积上限，确保 E_BODY_SIZE 与 E_BODY_LINES 两条护栏可区分。
+test('SKILL.md 全文超 2 万字符（行数未超限）报 E_BODY_SIZE', () => {
+  const body = Array.from({ length: 400 }, (_, i) => `第${i}行内容`.repeat(12)).join('\n')
+  const text = skill(OK, body + '\n')
+  assert.ok([...text].length > 20000, `夹具须超 2 万字符，实际 ${[...text].length}`)
+  assert.ok(text.split(/\r?\n/).length - 4 <= 500, '夹具行数不得超 500，否则会混入 E_BODY_LINES')
+  assert.deepEqual(codes(checkSkillText('sample', text)), ['E_BODY_SIZE'])
+})
+
+test('保留名目录报 E_NAME_RESERVED', () => {
+  assert.deepEqual(codes(checkSkillText('docs', skill('name: docs\ndescription: 保留名测试。'))), ['E_NAME_RESERVED'])
+})
+
 test('合法仓库通过校验', async () => {
   assert.deepEqual(await validateRepo(join(fixtures, 'valid')), [])
 })
@@ -85,6 +98,21 @@ test('平铺的 .md 报 E_FLAT', async () => {
 
 test('目录缺少 SKILL.md 报 E_NO_SKILL_MD', async () => {
   assert.deepEqual(codes(await validateRepo(join(fixtures, 'invalid', 'no-skill-md'))), ['E_NO_SKILL_MD'])
+})
+
+test('README 技能表缺该技能的行时报 E_INDEX', async () => {
+  const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises')
+  const root = await mkdtemp(join(await tmpBase(), 'idx-'))
+  try {
+    const dir = join(root, 'skills', 'sample')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'SKILL.md'), skill(OK), 'utf8')
+    // README 有技能表但没有任何以 sample 开头的行（散文提及不算入索引）。
+    await writeFile(join(root, 'README.md'), '# 项目\n\n| 技能 | 说明 |\n| --- | --- |\n| other | 别的技能 |\n', 'utf8')
+    assert.deepEqual(codes(await validateRepo(root)), ['E_INDEX'])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 test('本基座自身通过校验', async () => {

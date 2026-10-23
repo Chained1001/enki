@@ -1,0 +1,453 @@
+// 防的漂移：validate-output.mjs 的校验项与 PRD 验收标准（A-04~A-22 可脚本部分）脱节。
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { prepare } from '../skills/book-breakdown/scripts/prepare.mjs'
+import { findLineGaps, validateOutput } from '../skills/book-breakdown/scripts/validate-output.mjs'
+import { SECTIONS, tableColumns } from '../skills/book-breakdown/scripts/contract.mjs'
+
+const NOVEL = [
+  '第一章 相遇', '张三说：「你好。」李四点头。', '',
+  '第二章 同行', '两人同行。', '',
+  '第三章 风波', '起了风波。', '',
+  '第四章 破局', '破了局。', '',
+  '第五章 归途', '各自归途。', '',
+].join('\n')
+
+const quote = '（第 1 章：「你好。」）'
+const line = (text) => `- ${text}${quote}`
+
+function tableFile(name, columnsKey, rows) {
+  const cols = tableColumns(columnsKey)
+  return [
+    `# ${name}`, '',
+    `| ${cols.join(' | ')} |`,
+    `| ${cols.map(() => '---').join(' | ')} |`,
+    ...rows.map((r) => `| ${r.join(' | ')} |`),
+    '',
+  ].join('\n')
+}
+
+// 造一份「完整填写」的产物。
+async function makeFilledProduct() {
+  const dir = await mkdtemp(join(tmpdir(), 'vo-'))
+  const src = join(dir, '验收书.txt')
+  await writeFile(src, NOVEL, 'utf8')
+  const r = await prepare({ input: src })
+  const out = r.outDir
+
+  const fill = async (rel, sections) => {
+    const file = join(out, rel)
+    let text = await readFile(file, 'utf8')
+    text = text.replace(/^> 骨架文件.*$\n?/m, '')
+    for (const [name, content] of Object.entries(sections)) {
+      // 段块整体替换（Q-23/Q-24 跟进）：故事设计块的骨架是七项引导行，不是整段「（待填）」。
+      const block = new RegExp(`## ${name}\\n\\n[\\s\\S]*?(?=\\n## |$)`)
+      if (!block.test(text)) throw new Error(`${rel} 找不到段「${name}」`)
+      text = text.replace(block, `## ${name}\n\n${content}\n`)
+    }
+    if (text.includes('（待填）')) throw new Error(`${rel} 填写后仍有待填`)
+    await writeFile(file, text, 'utf8')
+  }
+  const writeRel = (rel, content) => writeFile(join(out, rel), content, 'utf8')
+  const fillAll = (rel, product, extra = {}) => {
+    const sections = {}
+    for (const s of SECTIONS[product]) sections[s] = extra[s] ?? line(`${product}·${s}`)
+    return fill(rel, sections)
+  }
+
+  // 全书大纲（Q-23/Q-24 跟进）：第一块故事设计七项逐行填写（骨架是七项引导行）。
+  await fill('故事底本/故事剧情/全书大纲.md', {
+    ...Object.fromEntries(SECTIONS.全书大纲.filter((s) => s !== '故事设计').map((s) => [s, line(`全书大纲·${s}`)])),
+    故事设计: ['主题母题：凡人抗天', '主角 logline：张三要归乡', '核心欲望与恐惧：回家与怕失去', '主要对手与对抗结构：车站困局', '弧光终点：离站→到站', '读者承诺：小人物突围', '结局形态：HE'].map((t) => line(t)).join('\n'),
+  })
+  await fillAll('故事底本/故事剧情/开篇三章.md', '开篇三章')
+  await fillAll('故事底本/全书设定/世界观.md', '世界观')
+  {
+    const file = join(out, '故事底本/全书设定/金手指.md')
+    let text = await readFile(file, 'utf8')
+    text = text.replace('- 金手指名称：（待填）', '- 金手指名称：后世记忆与认知')
+    await writeFile(file, text, 'utf8')
+  }
+  await fillAll('故事底本/全书设定/金手指.md', '金手指')
+  await fill('故事底本/文风.md', Object.fromEntries(
+    SECTIONS.文风.filter((s) => s !== '定量指纹').map((s) => [s, line(`文风·${s}`)]),
+  ))
+  await fill('故事底本/故事剧情/卷纲/卷01-全书.md', {
+    ...Object.fromEntries(SECTIONS.卷纲.filter((s) => s !== '事件弧清单').map((s) => [s, line(`卷纲·${s}`)])),
+    // 弧清单加「弧号」列（Q-24）：A01 起连续，是幕纲「与卷纲的对应」的外键。
+    事件弧清单: [
+      '| 弧号 | 弧名 | 起止章 | 弧型 | 五拍完成度 |',
+      '| --- | --- | --- | --- | --- |',
+      '| A01 | 相遇弧 | 1-2 | 关系阶段弧 | 全 |',
+      '| A02 | 风波弧 | 3-5 | 案件弧 | 全 |',
+    ].join('\n'),
+  })
+  for (const [i, arc] of ['相遇弧', '风波弧'].entries()) {
+    const arcNo = `A0${i + 1}`
+    await writeRel(`故事底本/故事剧情/幕纲/卷01-幕0${i + 1}-${arc}.md`,
+      `# 幕纲 ${arc}\n\n` + SECTIONS.幕纲.map((s) =>
+        `## ${s}\n\n${line(s === '与卷纲的对应' ? `卷纲弧号 ${arcNo}` : `${arc}·${s}`)}\n`).join('\n'))
+  }
+  for (const topic of ['力量体系', '成长与资源体系', '历史年表', '地理图志', '规则与铁则']) {
+    const file = join(out, `故事底本/全书设定/专题/${topic}.md`)
+    let text = await readFile(file, 'utf8')
+    text = text
+      .replace(/^> 骨架文件.*$\n?/m, '')
+      .replace('- 判定：（待填：涉及/弱涉及/本题材不涉及）', '- 判定：涉及')
+      .replace('- 依据：（待填）', `- 依据：原文有此子域${quote}`)
+    for (const s of SECTIONS.专题.filter((x) => x !== '涉及判定')) {
+      text = text.replace(`## ${s}\n\n（待填）`, `## ${s}\n\n${line(`${topic}·${s}`)}\n`)
+    }
+    if (text.includes('（待填）')) throw new Error(`专题 ${topic} 填写后仍有待填`)
+    await writeFile(file, text, 'utf8')
+  }
+  await writeRel('故事底本/全书设定/专题/时代参照层.md',
+    `# 时代参照层\n\n## 涉及判定\n\n- 判定：本题材不涉及\n- 依据：架空世界无现实年代${quote}\n- 指向：历史年表\n`)
+
+  await mkdir(join(out, '故事底本', '全书设定', '人物', '主角', '张三'), { recursive: true })
+  for (const f of ['人物卡', '成长轨迹', '身份与马甲', '目标与动机链', '关系与阵营']) {
+    await writeRel(`故事底本/全书设定/人物/主角/张三/${f}.md`, `# 张三 ${f}\n\n${line(`张三·${f}`)}\n`)
+  }
+  await writeRel('故事底本/全书设定/人物/主要配角/李四.md', `# 李四\n\n${line('李四是挚友')}\n`)
+  await writeRel('故事底本/全书设定/人物/次要角色/王五.md', `# 王五\n\n${line('王五路人')}\n`)
+  await writeRel('故事底本/全书设定/势力与组织/门派/青云门.md', `# 青云门\n\n${line('青云门是门派')}\n`)
+  await writeRel('故事底本/全书设定/地点/城市与场所/车站.md', `# 车站\n\n${line('相遇之地')}\n`)
+  await writeRel('故事底本/全书设定/物品/武器/铁剑.md', `# 铁剑\n\n${line('李四的剑')}\n`)
+  await writeRel('故事底本/全书设定/概念/事件/初遇.md', `# 初遇\n\n${line('初遇事件')}\n`)
+
+  const P = '故事底本/全书设定'
+  await writeRel(`${P}/人物/索引.md`, tableFile('人物索引', '人物索引', [
+    ['张三', '张三', '主角', '主角', '中立', '第1章', `${P}/人物/主角/张三`],
+    ['李四', '李四', '主要配角', '弧线配角', '友方', '第1章', `${P}/人物/主要配角/李四.md`],
+    ['王五', '王五', '次要', '无', '路人', '第2章', `${P}/人物/次要角色/王五.md`],
+  ]))
+  await writeRel(`${P}/人物/人物关系.md`, tableFile('人物关系', '人物关系', [
+    ['张三', '挚友', '李四', '第1章', '不变'],
+  ]))
+  await writeRel(`${P}/势力与组织/索引.md`, tableFile('势力索引', '集合索引', [
+    ['青云门', '门派', '主要', '第1章', `${P}/势力与组织/门派/青云门.md`],
+  ]))
+  await writeRel(`${P}/地点/索引.md`, tableFile('地点索引', '集合索引', [
+    ['车站', '城市与场所', '次要', '第1章', `${P}/地点/城市与场所/车站.md`],
+  ]))
+  await writeRel(`${P}/物品/索引.md`, tableFile('物品索引', '集合索引', [
+    ['铁剑', '武器', '次要', '第1章', `${P}/物品/武器/铁剑.md`],
+  ]))
+  await writeRel(`${P}/概念/索引.md`, tableFile('概念索引', '集合索引', [
+    ['初遇', '事件', '次要', '第1章', `${P}/概念/事件/初遇.md`],
+  ]))
+  await writeRel('工作/别名词典.md', tableFile('别名词典', '别名词典', [
+    ['张三', '张三', '人物', '第1章', '本名'],
+  ]))
+  await writeRel('工作/逐章记录.md', tableFile('逐章记录', '逐章记录', [
+    // 十一列跟进（Q-23/Q-24 跟进）：第 7 格补「剧情线」；第 10/11 格补「章末钩型/爽点标记」，全部取合法枚举。
+    ['1', '第一章 相遇', '张三', '车站', '张三、李四', '相遇', '主线', '埋 F001', '扬', '悬念', '无'],
+    ['2', '第二章 同行', '张三', '路上', '张三、李四', '同行', '主线', '', '扬', '期待', '小'],
+    ['3', '第三章 风波', '张三', '路上', '张三、李四', '风波', '主线', '', '抑', '钝收', '无'],
+    ['4', '第四章 破局', '张三', '路上', '张三、李四', '破局', '主线', '', '扬', '反差', '大'],
+    ['5', '第五章 归途', '张三', '车站', '张三', '归途', '主线', '收 F001', '扬', '危机', '中'],
+  ]))
+  await writeRel('故事底本/故事剧情/伏笔台账.md', tableFile('伏笔台账', '伏笔台账', [
+    // 十一列跟进（Q-23/Q-24 跟进）：类型/回收幕/重要度取合法枚举。
+    ['F001', '信物', '道具', '第1章', '第2章', '第5章', '卷01-幕02', '4', '张三', '主线', '已收'],
+  ]))
+  await writeRel('故事底本/故事剧情/分卷总表.md', tableFile('分卷总表', '分卷总表', [
+    // 十五列跟进（Q-23/Q-24 跟进）：本卷主要对手/追读钩入列，商业外证写「无」＝无数据。
+    ['01', '全书', '书名', '1-5', '5', '100/20', '相遇钩', '关系困局', '李四', '成长', '车站', '定格', '下一卷悬念', '三天', '无'],
+  ]))
+
+  return { dir, out }
+}
+
+async function withFilled(run) {
+  const { dir, out } = await makeFilledProduct()
+  try {
+    await run(out)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
+test('完整产物通过交付校验（零错误零警告）', async () => {
+  await withFilled(async (out) => {
+    const result = await validateOutput({ root: out })
+    assert.deepEqual(result.errors, [], '完整产物不应有任何问题')
+    assert.ok(result.ok)
+    assert.equal(result.data.verdict, '通过')
+  })
+})
+
+test('状态列带括号说明、文件残留骨架说明行不误报（spike 修复回归）', async () => {
+  await withFilled(async (out) => {
+    const read = (rel) => readFile(join(out, rel), 'utf8')
+    const write = (rel, text) => writeFile(join(out, rel), text, 'utf8')
+
+    // 伏笔状态「已收（说明…）」：枚举开头即可
+    const ledgerRel = '故事底本/故事剧情/伏笔台账.md'
+    const ledger = await read(ledgerRel)
+    await write(ledgerRel, ledger.replace('| 已收 |', '| 已收（转获鹿野战决胜的战略约束） |'))
+    let r1 = await validateOutput({ root: out })
+    assert.ok(!r1.errors.some((e) => e.code === 'E_FORESHADOW'), '带说明的状态不应误报')
+
+    // 已填文件残留骨架说明行（引用块含占位字样）不算未填
+    const actRel = '故事底本/故事剧情/幕纲/卷01-幕01-相遇弧.md'
+    const act = await read(actRel)
+    await write(actRel, `> 骨架文件：每段填写后删除「（待填）」。\n${act}`)
+    let r2 = await validateOutput({ root: out })
+    assert.ok(!r2.errors.some((e) => e.code === 'E_UNFILLED' && e.file === actRel), '引用块里的占位字样不应触发未填')
+
+    await write(ledgerRel, ledger)
+    await write(actRel, act)
+  })
+})
+
+test('进度模式：骨架产物判定进行中且不阻断', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'vo-prog-'))
+  try {
+    const src = join(dir, '骨架书.txt')
+    await writeFile(src, NOVEL, 'utf8')
+    const r = await prepare({ input: src })
+    const result = await validateOutput({ root: r.outDir, mode: 'progress' })
+    assert.ok(result.ok, '进度模式不因未填写而失败')
+    assert.equal(result.data.verdict, '进行中')
+    assert.ok(result.data.files.skeleton > 0)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('删段、改表头、删行、坏台账、多文件、缺文件、缺出处、弧幕不齐各自报对应错误码', async () => {
+  await withFilled(async (out) => {
+    const read = (rel) => readFile(join(out, rel), 'utf8')
+    const write = (rel, text) => writeFile(join(out, rel), text, 'utf8')
+
+    // E_SECTION：幕纲删段
+    const actRel = '故事底本/故事剧情/幕纲/卷01-幕01-相遇弧.md'
+    const act = await read(actRel)
+    await write(actRel, act.replace('## 幕末钩子\n\n' + line('相遇弧·幕末钩子') + '\n', ''))
+    let r1 = await validateOutput({ root: out })
+    assert.ok(r1.errors.some((e) => e.code === 'E_SECTION' && e.severity === 'error'), '应有 E_SECTION')
+    await write(actRel, act)
+
+    // E_COLUMN：分卷总表表头删一列
+    const tableRel = '故事底本/故事剧情/分卷总表.md'
+    const table = await read(tableRel)
+    await write(tableRel, table.replace('| 卷 | 卷名 |', '| 卷 |'))
+    let r2 = await validateOutput({ root: out })
+    assert.ok(r2.errors.some((e) => e.code === 'E_COLUMN'), '应有 E_COLUMN')
+    await write(tableRel, table)
+
+    // E_ROW_COUNT：逐章记录删一行
+    const recordRel = '工作/逐章记录.md'
+    const record = await read(recordRel)
+    // 十一列跟进（Q-23/Q-24 跟进）：删除目标行同步补钩型/爽点两格，与 makeFilledProduct 的十一列行保持一致。
+    await write(recordRel, record.replace('| 5 | 第五章 归途 | 张三 | 车站 | 张三 | 归途 | 主线 | 收 F001 | 扬 | 危机 | 中 |\n', ''))
+    let r3 = await validateOutput({ root: out })
+    assert.ok(r3.errors.some((e) => e.code === 'E_ROW_COUNT'), '应有 E_ROW_COUNT')
+    await write(recordRel, record)
+
+    // E_FORESHADOW：编号跳号、非法状态、回收早于埋点
+    // 十一列跟进（Q-23/Q-24 跟进）：追加行按新列序补类型/回收幕/重要度。
+    const ledgerRel = '故事底本/故事剧情/伏笔台账.md'
+    const ledger = await read(ledgerRel)
+    await write(ledgerRel, ledger
+      + '| F003 | 跳号 | 道具 | 第1章 | | | | | | 主线 | 已收 |\n'
+      + '| F002 | 坏状态 | 道具 | 第2章 | | | | | | 主线 | 完成 |\n'
+      + '| F003 | 早收 | 道具 | 第5章 | | 第1章 | | | 张三 | 主线 | 未收 |\n')
+    let r4 = await validateOutput({ root: out })
+    const fore = r4.errors.filter((e) => e.code === 'E_FORESHADOW')
+    assert.ok(fore.length >= 3, `应有至少 3 处 E_FORESHADOW，实际 ${fore.length}`)
+    await write(ledgerRel, ledger)
+
+    // E_TREE_EXTRA：多余文件
+    await write('故事底本/多余.md', '# 多余\n')
+    let r5 = await validateOutput({ root: out })
+    assert.ok(r5.errors.some((e) => e.code === 'E_TREE_EXTRA' && e.file === '故事底本/多余.md'), '应有 E_TREE_EXTRA')
+    await rm(join(out, '故事底本', '多余.md'))
+
+    // E_TREE_MISSING：缺固定文件
+    const worldRel = '故事底本/全书设定/世界观.md'
+    const world = await read(worldRel)
+    await rm(join(out, worldRel))
+    let r6 = await validateOutput({ root: out })
+    assert.ok(r6.errors.some((e) => e.code === 'E_TREE_MISSING' && e.file === worldRel), '应有 E_TREE_MISSING')
+    await write(worldRel, world)
+
+    // E_SOURCE：结论缺出处
+    await write(actRel, act + '\n- 没有出处的结论\n')
+    let r7 = await validateOutput({ root: out })
+    assert.ok(r7.errors.some((e) => e.code === 'E_SOURCE' && e.file === actRel), '应有 E_SOURCE')
+    await write(actRel, act)
+
+    // E_ACT_COVER：卷纲弧数与幕数不一致（弧号列跟进 Q-23/Q-24）
+    const volRel = '故事底本/故事剧情/卷纲/卷01-全书.md'
+    const vol = await read(volRel)
+    await write(volRel, vol.replace('| A02 | 风波弧 | 3-5 | 案件弧 | 全 |', '| A02 | 风波弧 | 3-5 | 案件弧 | 全 |\n| A03 | 余波弧 | 5-5 | 案件弧 | 全 |'))
+    let r8 = await validateOutput({ root: out })
+    assert.ok(r8.errors.some((e) => e.code === 'E_ACT_COVER'), '应有 E_ACT_COVER')
+    await write(volRel, vol)
+
+    // 恢复后应再次全绿
+    const final = await validateOutput({ root: out })
+    assert.deepEqual(final.errors, [])
+  })
+})
+
+test('出版书产物：幕纲数＝原文单元数', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'vo-pub-'))
+  try {
+    const unit = (n, name) => `第${n}幕 ${name}\n${'他说话了，声音很轻。'.repeat(2000)}\n`
+    await writeFile(join(dir, '出版书.txt'), unit('一', '开端') + '\n' + unit('二', '转折') + '\n' + unit('三', '收束'), 'utf8')
+    const r = await prepare({ input: join(dir, '出版书.txt') })
+    const result = await validateOutput({ root: r.outDir, mode: 'progress' })
+    assert.ok(result.ok)
+    assert.equal(result.data.bookType, '出版')
+    const acts = (await readdir(join(r.outDir, '故事底本', '故事剧情', '幕纲'))).filter((f) => f.endsWith('.md'))
+    assert.equal(acts.length, 3)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('非产物目录报 E_MANIFEST', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'vo-bad-'))
+  try {
+    await mkdir(join(dir, '工作'), { recursive: true })
+    const result = await validateOutput({ root: dir })
+    assert.ok(!result.ok)
+    assert.ok(result.errors.some((e) => e.code === 'E_MANIFEST'))
+    assert.ok(!existsSync(join(dir, 'x')), '校验只读不写')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// ---------- 产物增强（票C：Q-22 剧情线缺席警告，2026-10-23）----------
+
+// 合成逐章记录行（十一列，Q-23/Q-24 跟进）：no 章的剧情线取 lines 数组、「、」连接；
+// 钩型/爽点列与缺席检测无关，填合法枚举占位。
+function lineRows(map, from = 1, to = 200) {
+  const rows = []
+  for (let no = from; no <= to; no++) {
+    rows.push([String(no), `第${no}章`, '主角', '某地', '主角', `事件${no}`, (map[no] ?? ['主线']).join('、'), '', '扬', '悬念', '无'])
+  }
+  return rows
+}
+
+test('findLineGaps：某线出现 3 次后间隔 120 章命中（A-4）', () => {
+  // 阈值取 contract 的 THRESHOLDS.剧情线缺席章数上限＝100（字面量硬编码，防漂移）。
+  const rows = lineRows({ 10: ['主线', '支线·张荣水师'], 20: ['主线', '支线·张荣水师'], 30: ['主线', '支线·张荣水师'], 150: ['主线', '支线·张荣水师'] })
+  const gaps = findLineGaps(rows, 100)
+  assert.deepEqual(gaps, [{ 线名: '支线·张荣水师', 上次章号: 30, 缺席章数: 120 }], '第 30→150 章间隔 120>100 命中')
+})
+
+test('findLineGaps：主线每行出现不命中；不足 3 行的线不判缺席（A-4）', () => {
+  const rows = lineRows({ 5: ['主线', '支线·两现'], 190: ['主线', '支线·两现'] })
+  assert.deepEqual(findLineGaps(rows, 100), [], '每行出现的线无间隔；只出现 2 行的线（即使间隔 185 章）不进判定')
+})
+
+test('findLineGaps：待填与空单元格不算线名（A-4）', () => {
+  // 十一列跟进（Q-23/Q-24 跟进）：行同步补钩型/爽点两格（空格不参与缺席检测）。
+  const rows = [
+    ['1', '第一章', '张三', '车站', '张三', '事件', '（待填）', '', '扬', '', ''],
+    ['2', '第二章', '张三', '车站', '张三', '事件', '无', '', '扬', '', ''],
+    ['3', '第三章', '张三', '车站', '张三', '事件', '（待填）', '', '扬', '', ''],
+    ['200', '第四章', '张三', '车站', '张三', '事件', '（待填）', '', '扬', '', ''],
+  ]
+  assert.deepEqual(findLineGaps(rows, 100), [], '骨架态的待填/无/空格不产生缺席误报')
+})
+
+test('W_LINE_GAP：人工缺席数据在交付与进度两模式都报警告（A-4）', async () => {
+  await withFilled(async (out) => {
+    const recordRel = '工作/逐章记录.md'
+    // 注入缺席数据：支线·李四出现 3 次（第 1/2/3 章）后第 104 章才再现（章号差 101>100）；
+    // 主线每行出现，其最大间隔 100 恰不超过阈值，不告警——对照出警告只打缺席线。
+    // 十一列跟进（Q-23/Q-24 跟进）：注入表同步补章末钩型/爽点标记两列（合法枚举）。
+    await writeFile(join(out, recordRel), [
+      '# 逐章记录', '',
+      '| 全局章号 | 标题（清洗后） | 视角人物 | 地点 | 出场人物 | 一句话事件 | 剧情线 | 伏笔埋/收 | 情绪 | 章末钩型 | 爽点标记 |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| 1 | 第一章 相遇 | 张三 | 车站 | 张三、李四 | 相遇 | 主线、支线·李四 | 埋 F001 | 扬 | 悬念 | 无 |',
+      '| 2 | 第二章 同行 | 张三 | 路上 | 张三、李四 | 同行 | 主线、支线·李四 | | 扬 | 期待 | 小 |',
+      '| 3 | 第三章 风波 | 张三 | 路上 | 张三、李四 | 风波 | 主线、支线·李四 | | 抑 | 钝收 | 无 |',
+      '| 4 | 第四章 破局 | 张三 | 路上 | 张三、李四 | 破局 | 主线 | | 扬 | 反差 | 大 |',
+      '| 104 | 第五章 归途 | 张三 | 车站 | 张三 | 归途 | 主线、支线·李四 | 收 F001 | 扬 | 危机 | 中 |',
+      '',
+    ].join('\n'), 'utf8')
+    for (const mode of ['deliver', 'progress']) {
+      const result = await validateOutput({ root: out, mode })
+      const lineGaps = result.errors.filter((e) => e.code === 'W_LINE_GAP')
+      assert.equal(lineGaps.length, 1, `${mode} 模式应恰有一条 W_LINE_GAP（主线不告警）`)
+      assert.equal(lineGaps[0].file, '工作/逐章记录.md')
+      assert.equal(lineGaps[0].severity, 'warning')
+      assert.match(lineGaps[0].message, /剧情线 支线·李四 自第 3 章后已缺席 101 章/, `${mode} 模式警告文案`)
+    }
+    // 警告级不阻断：交付模式 ok 仍为 true，仅总判定降为「需修改」
+    const deliver = await validateOutput({ root: out })
+    assert.ok(deliver.ok, 'W_LINE_GAP 为警告级，不阻断')
+    assert.equal(deliver.data.verdict, '需修改')
+  })
+})
+
+// ---------- 策略空挂字段落地（票D：Q-23/Q-24，2026-10-23）----------
+
+test('E_ENUM：逐章记录钩型非法值报错、枚举开头与待填不报（A-4）', async () => {
+  await withFilled(async (out) => {
+    const recordRel = '工作/逐章记录.md'
+    const record = await readFile(join(out, recordRel), 'utf8')
+    // 钩型非法值「大危机」（不以任何枚举值开头）
+    await writeFile(join(out, recordRel), record.replace('| 悬念 | 无 |', '| 大危机 | 无 |'), 'utf8')
+    let r1 = await validateOutput({ root: out })
+    const enums = r1.errors.filter((e) => e.code === 'E_ENUM')
+    assert.equal(enums.length, 1, '应恰有一条 E_ENUM')
+    assert.match(enums[0].message, /第 1 行章末钩型「大危机」不在枚举内（危机、悬念、期待、反差、钝收）/, '错误文案含枚举清单')
+    // 合法：枚举值开头＋补充说明不报
+    await writeFile(join(out, recordRel), record.replace('| 悬念 | 无 |', '| 悬念（章末反问） | 无 |'), 'utf8')
+    let r2 = await validateOutput({ root: out })
+    assert.ok(!r2.errors.some((e) => e.code === 'E_ENUM'), '枚举开头的带说明取值不应误报')
+    // 骨架态「（待填）」不报（清空该两格后注入）
+    await writeFile(join(out, recordRel), record.replace('| 悬念 | 无 |', '| （待填） | （待填） |'), 'utf8')
+    let r3 = await validateOutput({ root: out })
+    assert.ok(!r3.errors.some((e) => e.code === 'E_ENUM'), '「（待填）」骨架态不报')
+    await writeFile(join(out, recordRel), record)
+
+    // 台账类型/重要度同规则：非法类型报错
+    const ledgerRel = '故事底本/故事剧情/伏笔台账.md'
+    const ledger = await readFile(join(out, ledgerRel), 'utf8')
+    await writeFile(join(out, ledgerRel), ledger.replace('| 道具 |', '| 器物 |'), 'utf8')
+    let r4 = await validateOutput({ root: out })
+    const led = r4.errors.filter((e) => e.code === 'E_ENUM')
+    assert.equal(led.length, 1)
+    assert.match(led[0].message, /编号 F001 类型「器物」不在枚举内（道具、身份、情感、设定、事件）/)
+    await writeFile(join(out, ledgerRel), ledger)
+  })
+})
+
+test('W_ARC_REF：幕纲弧号在卷纲弧清单中不存在时命中、存在时不命中（A-4）', async () => {
+  await withFilled(async (out) => {
+    const actRel = '故事底本/故事剧情/幕纲/卷01-幕01-相遇弧.md'
+    const act = await readFile(join(out, actRel), 'utf8')
+
+    // 命中：幕01 引用 A99，卷01 弧清单只有 A01/A02
+    await writeFile(join(out, actRel), act.replace('卷纲弧号 A01', '卷纲弧号 A99'), 'utf8')
+    let r1 = await validateOutput({ root: out })
+    const hit = r1.errors.filter((e) => e.code === 'W_ARC_REF')
+    assert.equal(hit.length, 1, '应恰有一条 W_ARC_REF')
+    assert.match(hit[0].message, /幕纲弧号 A99 在卷纲弧清单中不存在/, '外键缺失文案')
+    assert.ok(r1.ok && r1.data.verdict === '需修改', '警告级不阻断')
+
+    // 对应段无弧号也命中（缺弧号提示）
+    await writeFile(join(out, actRel), act.replace('卷纲弧号 A01', '支撑卷纲的目标'), 'utf8')
+    let r2 = await validateOutput({ root: out })
+    assert.ok(r2.errors.some((e) => e.code === 'W_ARC_REF' && /缺弧号/.test(e.message)), '缺弧号应出 W_ARC_REF')
+
+    // 不命中：恢复后零错误零警告
+    await writeFile(join(out, actRel), act)
+    const green = await validateOutput({ root: out })
+    assert.deepEqual(green.errors, [], '弧号存在时不应有任何问题')
+  })
+})

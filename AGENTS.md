@@ -4,7 +4,7 @@
 
 ## 项目是什么
 
-小说拆书技能包，目前只有一个 `book-breakdown`：把整本 txt 按章拆开，产出章节摘要与写作要素。通过 `npx skills add Chained1001/enki` 安装。
+小说拆书技能包，目前只有一个 `book-breakdown`：把整本 txt 拆成结构化、可校验、可按层复用的产物（结构化模式，默认）或章节摘要报告（快速模式）。通过 `npx skills add Chained1001/enki` 安装。
 
 ## 开始之前
 
@@ -40,12 +40,11 @@
 | 当前版本号 | `package.json` 的 `version` |
 | 变更历史 | `CHANGELOG.md` |
 | 规则 | `docs/规范/` |
+| 产品契约与运行流程 | `docs/产品/PRD.md`（「产品流程」节） |
+| 段名、表头、枚举、阈值 | `skills/book-breakdown/scripts/contract.mjs` |
+| 术语 | `GLOSSARY.md` |
 
 两处冲突且判不出哪处是真源时，先裁决再动手，把结果记一行到下表；没有冲突时删掉此表。
-
-| 事实 | 冲突位置 | 裁决 | 日期 |
-|---|---|---|---|
-| TODO | TODO | TODO | YYYY-MM-DD |
 
 ## 改动同步
 
