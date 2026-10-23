@@ -65,6 +65,14 @@
 
 提交信息按 `docs/规范/04-提交与分支.md`。
 
+## 工作队列
+
+待做的工作记在 GitHub issues（`Chained1001/enki`），不写进本文件——本文件只写指针，避免票号过期。
+
+开工前查 frontier：没被未完成 issue 阻塞的那张就是下一张。
+
+`gh issue list --state open --json number,title,blockedBy`
+
 ## 禁止事项
 
 - 禁止把整本小说复制进仓库，改为只写路径（原因：语料不入库）。

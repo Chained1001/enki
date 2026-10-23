@@ -8,6 +8,7 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
 - **Read an issue**: `gh issue view <number> --json number,title,body,labels,comments`.
+- **Read blocking edges**: `gh issue view <n> --json blockedBy,blocking`. 返回的是 `{nodes: [...], totalCount}`，不是数组；`blockedBy` 的 node 带 `state`，按 `state == "OPEN"` 算未完成。本仓库实测 `gh` 2.102.1 没有 `issueDependenciesSummary` 这个字段（照模板写会报 `Unknown JSON field`）。
 - **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
 - **Make an issue a sub-issue of a parent**: `gh issue create --parent <parent> ...`, or `gh issue edit <parent> --add-sub-issue <child>` afterwards (`gh` 2.94+；本仓库实测 `gh` 2.102.1，原生命令可用). Older `gh`: `gh api --method POST repos/<owner>/<repo>/issues/<parent>/sub_issues -F sub_issue_id=<child-db-id>` (database id, as in **Blocking** below). Without sub-issues, put `Part of #<parent>` at the top of the child body.
 - **Comment on an issue**: `gh issue comment <number> --body "..."`
