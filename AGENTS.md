@@ -70,3 +70,17 @@
 - 禁止把整本小说复制进仓库，改为只写路径（原因：语料不入库）。
 
 「原因」写可核查的后果，或写会被哪条检查发现，不写「更清晰」「更好维护」。
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub issues in `Chained1001/enki`, created and read with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical triage roles map one-to-one to labels of the same name (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `GLOSSARY.md` at the repo root, no `GLOSSARY-MAP.md`. See `docs/agents/domain.md`.
