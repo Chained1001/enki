@@ -473,10 +473,10 @@ export function buildArtifacts({ book, sourceName, chapters, volumes, bookType, 
   const authorResult = authorNotesText(notes)
   files.set('原文/作者的话.md', authorResult.text)
   files.set('工作/别名词典.md', tableSkeleton('别名词典', tableColumns('别名词典')))
-  // 逐章记录十一列（Q-22 剧情线插「一句话事件」后；Q-23 再加章末钩型/爽点标记），
-  // 骨架先落章号与标题两列，其余待填。
+  // 逐章记录十二列（Q-22 剧情线插「一句话事件」后；Q-23 再加章末钩型/爽点标记；
+  // 后加「章字数」——该列由本脚本直接写入已知的 chars，不留待填，避免 agent 重复计算）。
   files.set('工作/逐章记录.md', tableSkeleton('逐章记录', tableColumns('逐章记录'),
-    chapters.map((c) => [String(c.no), esc(c.title), '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）'])))
+    chapters.map((c) => [String(c.no), esc(c.title), String(c.chars), '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）'])))
   for (const [name, types] of Object.entries(COLLECTIONS)) {
     files.set(`故事底本/全书设定/${name}/索引.md`, tableSkeleton(`${name}索引`,
       tableColumns(name === '人物' ? '人物索引' : '集合索引')))

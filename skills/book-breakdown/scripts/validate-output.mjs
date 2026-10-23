@@ -217,6 +217,22 @@ export async function validateOutput({ root, mode = 'deliver' }) {
       fail('E_ROW_COUNT', '工作/逐章记录.md', `数据行 ${rows.length} 行，应为 ${manifest.chapterCount} 行（＝章节数）`)
     }
     rows.forEach((r, i) => { if (r.length !== recordCols.length) fail('E_COLUMN', '工作/逐章记录.md', `第 ${i + 1} 行列数 ${r.length}，应为 ${recordCols.length} 列（单元格含 | 会裂列，生成侧已转义）`) })
+    // 章字数必须是正整数，且应与 manifest 的 chars 一致（脚本填，防止被改成 agent 估算值）。
+    const charsIdx = recordCols.indexOf('章字数')
+    if (charsIdx >= 0) {
+      rows.forEach((r, i) => {
+        const cell = String(r[charsIdx] ?? '').trim()
+        if (!cell || cell.includes('待填')) return
+        if (!/^\d+$/.test(cell)) {
+          fail('E_CHARCOUNT', '工作/逐章记录.md', `第 ${i + 1} 行章字数「${cell.slice(0, 20)}」不是正整数（该列由脚本填，不填估算值）`)
+          return
+        }
+        const expect = manifest.chapters?.[i]?.chars
+        if (typeof expect === 'number' && Number(cell) !== expect) {
+          fail('E_CHARCOUNT', '工作/逐章记录.md', `第 ${i + 1} 行章字数 ${cell} 与 manifest 的 ${expect} 不一致（该列由脚本填，勿手改）`)
+        }
+      })
+    }
     // 取值枚举（Q-23）：章末钩型与爽点标记；「（待填）」骨架态与空格不报，合法＝以枚举值开头。
     for (const [name, values] of [['章末钩型', ENUMS.钩型], ['爽点标记', ENUMS.爽点标记]]) {
       const idx = recordCols.indexOf(name)
