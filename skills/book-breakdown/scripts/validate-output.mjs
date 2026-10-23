@@ -435,6 +435,7 @@ export async function validateOutput({ root, mode = 'deliver' }) {
         if (QUOTE_RULE.coordinate.test(body)) continue
         if (QUOTE_RULE.coordinateSections.includes(section)) continue
         if (QUOTE_RULE.dutyNote.test(body)) continue
+        if (QUOTE_RULE.enumeration(body)) continue
         claims += 1
         if (QUOTE_PATTERN.test(t)) quoted += 1
       }

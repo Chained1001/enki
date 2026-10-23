@@ -110,10 +110,19 @@ test('引句口径把坐标行、否定式说明、分工说明排除在分母�
   assert.ok(QUOTE_RULE.negativeValue.test('力量/成长坐标：无成长弧'), '无成长弧应被识别')
   // 分工说明：讲槽位归属，不是对本作的结论
   assert.ok(QUOTE_RULE.dutyNote.test('地理图志：行程天数归地理图志（分工说明，见第 4 章）'))
-  // 反面：真正的引述型结论不得被误剔除
+  // 纯枚举行：人名＋章号的名册/真假对照，通篇无叙述句
+  assert.ok(QUOTE_RULE.enumeration('**虚构**：李善德（第 1 章）、阿僮（第 2 章）、苏谅（第 2 章）、赵欣宁（第 2 章）'))
+  assert.ok(QUOTE_RULE.enumeration('何履光（经略使，第 2 章入会）、赵欣宁（掌书记，第 2 章入会）'))
+  // 反面：真的是引述型结论不得被误剔除
   assert.ok(!QUOTE_RULE.negativeBare.test('他的弱点是只敢说到界限为止'))
   assert.ok(!QUOTE_RULE.coordinate.test('卖符牒得九百九十六贯（第 2 章）'))
   assert.ok(!QUOTE_RULE.dutyNote.test('卖符牒得九百九十六贯（第 2 章）'))
+  // 枚举判据要求 ≥2 个章号且无句末标点——带叙述句的行不算枚举
+  assert.ok(!QUOTE_RULE.enumeration('卖符牒得九百九十六贯（第 2 章）'), '单个章号不算枚举')
+  assert.ok(
+    !QUOTE_RULE.enumeration('何履光（第 2 章）要杀他。（第 3 章）赵欣宁派牙兵。'),
+    '带句号叙述句不算枚举',
+  )
 })
 
 test('引句阈值为「条目≥3 且覆盖率<50%」，避免短卡与误报', () => {

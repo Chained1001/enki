@@ -171,6 +171,19 @@ export const QUOTE_RULE = {
   ],
   // 行级：分工说明——讲「这块归哪个槽位」的元信息，不是对本作的结论
   dutyNote: /（分工说明/,
+  // 行级：纯枚举行——「标签：甲（第 1 章）、乙（第 2 章）、丙（第 3 章）」这种
+  // 成员名册/真假对照，通篇是人名＋章号，没有叙述句，配引句无处可配。
+  // 判据：整行无句末标点，且「（第 N 章…）」出现 ≥2 次；去掉全部括注后每段只允许是短名字（≤12 字）。
+  enumeration: (body) => {
+    const RE = /[（(][^）)]*第\s*[0-9一二三四五六七八九十百千万零两、，,\s至~\-—–－]+\s*[章幕][^）)]*[）)]/g
+    const marks = body.match(RE)
+    if (!marks || marks.length < 2) return false
+    if (/[。；;]/.test(body)) return false
+    // 去掉所有含章号的括注，剩下的应只剩标签与短名字
+    const rest = body.replace(RE, '')
+    const pieces = rest.split(/[、，,：:]/).map((x) => x.replace(/[\s*（）()]/g, '')).filter(Boolean)
+    return pieces.every((p) => p.length <= 12)
+  },
 }
 
 // 结论字段：模板要求带「第 N 章」的字段名。用于一致性测试，防止模板把结论降级成元字段。
