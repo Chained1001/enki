@@ -112,12 +112,45 @@ async function makeFilledProduct() {
   for (const f of ['人物卡', '成长轨迹', '身份与马甲', '目标与动机链', '关系与阵营']) {
     await writeRel(`故事底本/全书设定/人物/主角/张三/${f}.md`, `# 张三 ${f}\n\n${line(`张三·${f}`)}\n`)
   }
-  await writeRel('故事底本/全书设定/人物/主要配角/李四.md', `# 李四\n\n${line('李四是挚友')}\n`)
-  await writeRel('故事底本/全书设定/人物/次要角色/王五.md', `# 王五\n\n${line('王五路人')}\n`)
-  await writeRel('故事底本/全书设定/势力与组织/门派/青云门.md', `# 青云门\n\n${line('青云门是门派')}\n`)
-  await writeRel('故事底本/全书设定/地点/城市与场所/车站.md', `# 车站\n\n${line('相遇之地')}\n`)
-  await writeRel('故事底本/全书设定/物品/武器/铁剑.md', `# 铁剑\n\n${line('李四的剑')}\n`)
-  await writeRel('故事底本/全书设定/概念/事件/初遇.md', `# 初遇\n\n${line('初遇事件')}\n`)
+  // 卡片按模板字段逐条填写（T9）：validate-output 现在查卡片字段标签的存在性与非空，
+  // 单行「- 一句话」的卡会被 E_CARD_FIELD 拦下——这正是要防的那种空卡。
+  const card = (title, fields) =>
+    `# ${title}\n\n` + fields.map(([label, value]) => `- ${label}：${value}`).join('\n') + '\n'
+  const v = (text) => `${text}${quote}`
+  await writeRel('故事底本/全书设定/人物/主要配角/李四.md', card('李四', [
+    ['姓名（主名）', '李四'], ['别称与马甲', '四哥'], ['归属势力', '青云门'], ['力量/成长坐标', v('炼气三段')],
+    ['首次出场章', '第1章'], ['关键章节链', v('第1章相遇')], ['核心关系', v('张三的挚友')],
+    ['说话风格与人设锚点', v('笑着说话')], ['体貌锚点', v('瘦高')], ['衣着与装束', v('青衫')],
+    ['神态与动作锚', v('摸鼻子')], ['外在目标（要什么）', v('求道')], ['内在缺口（缺什么）', v('怕被抛下')],
+    ['致命弱点（会毁在哪）', v('心软')], ['原型词/功能位', '挚友'], ['结局状态与死亡/退场章', '在世（未完）'],
+    ['金句锚', v('「走吧。」')],
+  ]))
+  await writeRel('故事底本/全书设定/人物/次要角色/王五.md', card('王五', [
+    ['姓名（主名）', '王五'], ['别称与马甲', '无'], ['归属势力', '无'], ['力量/成长坐标', v('原文未写')],
+    ['首次出场章', '第2章'], ['关键章节链', v('第2章露面')], ['核心关系', v('路人')],
+    ['说话风格与人设锚点', v('沉默')], ['体貌锚点', v('原文未写')], ['衣着与装束', v('原文未写')],
+    ['神态与动作锚', v('原文未写')], ['外在目标（要什么）', v('原文未写')], ['内在缺口（缺什么）', v('原文未写')],
+    ['致命弱点（会毁在哪）', v('原文未写')], ['原型词/功能位', '路人'], ['结局状态与死亡/退场章', '在世（未完）'],
+    ['金句锚', v('「嗯。」')],
+  ]))
+  await writeRel('故事底本/全书设定/势力与组织/门派/青云门.md', card('青云门', [
+    ['名称与俗称', '青云门'], ['性质类型', '门派'], ['所在地/据点', '青云山'], ['层级结构', v('掌门—长老—弟子')],
+    ['成员表', v('李四')], ['势力关系', v('与魔教敌对')], ['与主角关系及演变', v('收留张三')],
+    ['首次出场章', '第1章'], ['关键事件章', v('第3章灭门')], ['状态变化', v('由盛转衰')], ['结局', v('覆灭')],
+  ]))
+  await writeRel('故事底本/全书设定/地点/城市与场所/车站.md', card('车站', [
+    ['名称', '车站'], ['别名与真名揭示章', '无'], ['所属区域', '县城'], ['功能与象征意义', v('离别之地')],
+    ['空间规则', '常规'], ['关联人物与势力', v('张三、李四')], ['首次出场章', '第1章'],
+    ['进入章', '第1章'], ['状态轨迹', v('始终原样')],
+  ]))
+  await writeRel('故事底本/全书设定/物品/武器/铁剑.md', card('铁剑', [
+    ['名称', '铁剑'], ['类别', '武器'], ['强度等级', v('能胜寻常镖师')], ['能力与代价', v('无特殊代价')],
+    ['获得章', '第1章'], ['经手与流转链', v('李四→张三')], ['象征义', v('信物')], ['结局', v('断于第5章')],
+  ]))
+  await writeRel('故事底本/全书设定/概念/事件/初遇.md', card('初遇', [
+    ['名称', '初遇'], ['一句话定义', v('两人在车站结识')], ['首次系统阐释章', '第1章'],
+    ['规则细节', v('无')], ['上位/下位概念', v('原文未提及其他概念')], ['揭示节奏', v('第1章引入')], ['与主角的关系', v('起点事件')],
+  ]))
 
   const P = '故事底本/全书设定'
   await writeRel(`${P}/人物/索引.md`, tableFile('人物索引', '人物索引', [
@@ -406,6 +439,23 @@ test('W_LINE_GAP：人工缺席数据在交付与进度两模式都报警告（A
 
 // ---------- 策略空挂字段落地（票D：Q-23/Q-24，2026-10-23）----------
 
+test('T10：情绪列纳入枚举校验（ENUMS.情绪 定义了却从没被用过）', async () => {
+  await withFilled(async (out) => {
+    const recordRel = '工作/逐章记录.md'
+    const record = await readFile(join(out, recordRel), 'utf8')
+    // 「上扬」不以任何合法值开头（合法值是 扬/抑/震荡），此前完全不报
+    await writeFile(join(out, recordRel), record.replace('| 扬 | 悬念 |', '| 上扬 | 悬念 |'), 'utf8')
+    const r = await validateOutput({ root: out })
+    const hits = r.errors.filter((e) => e.code === 'E_ENUM')
+    assert.equal(hits.length, 1, '情绪非法值应恰报一条')
+    assert.match(hits[0].message, /第 1 行情绪「上扬」不在枚举内（扬、抑、震荡）/, '错误文案要列出合法取值')
+    // 合法：枚举值开头＋补充说明（「震荡（先扬后抑）」）不报
+    await writeFile(join(out, recordRel), record.replace('| 扬 | 悬念 |', '| 震荡（先扬后抑） | 悬念 |'), 'utf8')
+    const r2 = await validateOutput({ root: out })
+    assert.ok(!r2.errors.some((e) => e.code === 'E_ENUM'), '枚举开头的带说明取值不应误报')
+  })
+})
+
 test('E_ENUM：逐章记录钩型非法值报错、枚举开头与待填不报（A-4）', async () => {
   await withFilled(async (out) => {
     const recordRel = '工作/逐章记录.md'
@@ -536,5 +586,117 @@ test('W_QUOTE：散文段落里的结论也进覆盖率分母（不能靠改写�
       r.errors.some((e) => e.code === 'W_QUOTE' && e.file === rel),
       '散文写法的引述型结论必须进分母，否则改格式就能抹掉警告',
     )
+    // T1：同一批散文结论还要单独报一次 W_PROSE，让「这个文件主要靠散文承载结论」进交付报告。
+    assert.ok(
+      r.errors.some((e) => e.code === 'W_PROSE' && e.file === rel),
+      '靠散文承载结论的文件须单独报警告，否则这部分内容在报告里看不见',
+    )
+  })
+})
+
+// ---------- v0.3.0 质量门（#11）----------
+
+// T18b：data.errors 与 problems 必须说同一件事。
+// 原先 progress 模式在返回前 `errors.length = 0` 清计数，problems 却原样返回，
+// 于是汇总说「错误 0」、CLI 按 severity 逐条打印「错误 [E_INDEX]」——同一份结果两个说法。
+for (const mode of ['deliver', 'progress']) {
+  test(`T18b：${mode} 模式下 data.errors 等于 problems 里 error 的条数`, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vo-count-'))
+    try {
+      const src = join(dir, '骨架书.txt')
+      await writeFile(src, NOVEL, 'utf8')
+      const r = await prepare({ input: src })
+      const result = await validateOutput({ root: r.outDir, mode })
+      const errorCount = result.errors.filter((e) => e.severity === 'error').length
+      const warningCount = result.errors.filter((e) => e.severity === 'warning').length
+      assert.equal(result.data.errors, errorCount, 'data.errors 必须等于 problems 里 error 的条数')
+      assert.equal(result.data.warnings, warningCount, 'data.warnings 必须等于 problems 里 warning 的条数')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+}
+
+test('T18b：骨架态空集合在进度模式降为 W_INDEX_EMPTY，交付模式仍是 E_INDEX', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'vo-empty-'))
+  try {
+    const src = join(dir, '骨架书.txt')
+    await writeFile(src, NOVEL, 'utf8')
+    const r = await prepare({ input: src })
+    const progress = await validateOutput({ root: r.outDir, mode: 'progress' })
+    const deliver = await validateOutput({ root: r.outDir, mode: 'deliver' })
+    assert.ok(
+      !progress.errors.some((e) => e.code === 'E_INDEX'),
+      '进度模式不该把「还没做」报成错误（它靠 severity 降级，不靠清计数）',
+    )
+    assert.ok(
+      progress.errors.some((e) => e.code === 'W_INDEX_EMPTY' && e.severity === 'warning'),
+      '进度模式要把空集合报成警告，让使用者知道还有哪些集合没做',
+    )
+    assert.ok(
+      deliver.errors.some((e) => e.code === 'E_INDEX' && e.severity === 'error'),
+      '交付模式空集合仍是错误，否则空产物也交得出去',
+    )
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// T9：卡片字段存在性。此前 52 个卡片字段零校验——路径不被 productOf() 识别，
+// 「有没有填」这件事根本不进账本，交出一张只有标题的空卡也能过。
+test('T9：卡片缺字段标签或有标签无内容时报 E_CARD_FIELD', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/势力与组织/门派/青云门.md'
+    // 先留住夹具里那份填好的卡，后面两步都在它的基础上改一处。
+    const full = await readFile(join(out, rel), 'utf8')
+    assert.match(full, /- 层级结构：/, '夹具里的卡应是按模板填好的')
+
+    // ① 只有标题没有字段 → 缺标签
+    await writeFile(join(out, rel), '# 青云门\n\n一句话说完。\n', 'utf8')
+    const r1 = await validateOutput({ root: out })
+    assert.ok(
+      r1.errors.some((e) => e.code === 'E_CARD_FIELD' && e.file === rel && /缺 \d+ 个字段标签/.test(e.message)),
+      '只有标题的空卡必须报缺字段',
+    )
+
+    // ② 标签齐全但有一格空着 → 有标签无内容
+    const holed = full.replace(/- 层级结构：[^\n]*/, '- 层级结构：')
+    assert.notEqual(holed, full, '替换须真的把值清空')
+    await writeFile(join(out, rel), holed, 'utf8')
+    const r2 = await validateOutput({ root: out })
+    assert.ok(
+      r2.errors.some((e) => e.code === 'E_CARD_FIELD' && e.file === rel && /有标签无内容/.test(e.message)),
+      '标签在但内容空着也要报，否则留空即可绕开',
+    )
+
+    // ③ 填「无（第 N 章）」是合法填写，不该报
+    await writeFile(join(out, rel),
+      full.replace(/- 层级结构：[^\n]*/, '- 层级结构：无（第 1 章：未提及层级）'), 'utf8')
+    const r3 = await validateOutput({ root: out })
+    assert.ok(
+      !r3.errors.some((e) => e.code === 'E_CARD_FIELD' && e.file === rel),
+      '「无」加注章是合法填写，不能被判为空',
+    )
+
+    // ④ 空值行的下一行不能被当成它的值（正则 `\s*` 会吃换行，曾把「- 层级结构：」判成已填）
+    const nextLine = full.replace(/- 层级结构：[^\n]*/, '- 层级结构：\n- 状态变化：由盛转衰')
+    assert.notEqual(nextLine, full)
+    await writeFile(join(out, rel), nextLine, 'utf8')
+    const r4 = await validateOutput({ root: out })
+    assert.ok(
+      r4.errors.some((e) => e.code === 'E_CARD_FIELD' && /有标签无内容/.test(e.message) && /层级结构/.test(e.message)),
+      '空值行不得吞掉下一行当作自己的值',
+    )
+  })
+})
+
+test('T9：主角五文件不走卡片字段校验（人物卡模板明写「主角不用本卡」）', async () => {
+  await withFilled(async (out) => {
+    // 夹具里的主角五文件本来就只有一个段落，没有 17 个卡片字段；若误走卡片校验会误报。
+    const r = await validateOutput({ root: out })
+    const hits = r.errors.filter(
+      (e) => e.code === 'E_CARD_FIELD' && e.file.includes('/人物/主角/'),
+    )
+    assert.deepEqual(hits, [], '主角五文件各有自己的段名契约，不该套人物卡字段模板')
   })
 })

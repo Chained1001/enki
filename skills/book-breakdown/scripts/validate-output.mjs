@@ -105,6 +105,12 @@ export async function validateOutput({ root, mode = 'deliver' }) {
   const problems = []
   const fail = (code, file, message) => problems.push({ severity: 'error', code, file, message })
   const warn = (code, file, message) => problems.push({ severity: 'warning', code, file, message })
+  // 未完成 vs 做错了：前者是「这一块还没填」，后者是「填了但不符合契约」。
+  // 进度模式下未完成只提示（用带 _EMPTY/_UNFILLED 的警告码，降为警告），做错了照旧报错。
+  // 早先用「errors.length = 0」在返回前清计数，导致 data.errors 说 0、problems 里却有 error，
+  // 同一份结果两个说法（CLI 按 severity 逐条打印，使用者看到满屏「错误」却被告知「错误 0」）。
+  const pending = (code, warnCode, file, message) =>
+    (mode === 'progress' ? warn(warnCode, file, message) : fail(code, file, message))
 
   let manifest
   try {
@@ -187,6 +193,54 @@ export async function validateOutput({ root, mode = 'deliver' }) {
     }
   }
 
+  // 卡片字段存在性（T9）：52 个卡片字段此前零校验——路径不被 productOf() 识别，
+  // 于是能不能写空话只影响 E_SOURCE，不影响「这一格有没有填」。
+  // 只查存在性与非空，不查出处的质量、不判内容好坏（那是 W_QUOTE 与人工抽读的事）。
+  const CARD_FIELDS = {
+    人物: [
+      '姓名（主名）', '别称与马甲', '归属势力', '力量/成长坐标', '首次出场章', '关键章节链',
+      '核心关系', '说话风格与人设锚点', '体貌锚点', '衣着与装束', '神态与动作锚',
+      '外在目标（要什么）', '内在缺口（缺什么）', '致命弱点（会毁在哪）', '原型词/功能位',
+      '结局状态与死亡/退场章', '金句锚',
+    ],
+    势力与组织: ['名称与俗称', '性质类型', '所在地/据点', '层级结构', '成员表', '势力关系', '与主角关系及演变', '首次出场章', '关键事件章', '状态变化', '结局'],
+    地点: ['名称', '别名与真名揭示章', '所属区域', '功能与象征意义', '空间规则', '关联人物与势力', '首次出场章', '进入章', '状态轨迹'],
+    物品: ['名称', '类别', '强度等级', '能力与代价', '获得章', '经手与流转链', '象征义', '结局'],
+    概念: ['名称', '一句话定义', '首次系统阐释章', '规则细节', '上位/下位概念', '揭示节奏', '与主角的关系'],
+  }
+  for (const { rel, full } of actual) {
+    const m = /^故事底本\/全书设定\/(人物|势力与组织|地点|物品|概念)\//.exec(rel)
+    if (!m || !rel.endsWith('.md')) continue
+    if (rel.endsWith('索引.md') || rel.endsWith('人物关系.md')) continue
+    // 主角的五份文件各有自己的段名契约，不走卡片字段校验（人物卡模板明写「主角不用本卡」）。
+    if (/^故事底本\/全书设定\/人物\/主角\//.test(rel)) continue
+    const kind = m[1]
+    const labels = CARD_FIELDS[kind]
+    if (!labels) continue
+    const text = texts.get(rel) ?? await readFile(full, 'utf8')
+    if (text.includes('（待填）')) continue
+    const missing = []
+    const empty = []
+    for (const label of labels) {
+      // 标签匹配放宽模板的三种常见写法：括号修饰、斜杠并称、章后缀。
+      // 注意 `\s*` 会吃掉换行，「- 层级结构：」空值行就会把下一行当成自己的值，
+      // 于是「有标签无内容」被误判为「已填」。改用 [ \t]* 只吃同行空白。
+      const esc = label.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+      const re = new RegExp(`^-[ \\t]*${esc}(?:章)?(?:[（(][^）)]*[）)])?[ \\t]*[：:][ \\t]*([^\\n]*)$`, 'm')
+      const hit = re.exec(text)
+      if (!hit) { missing.push(label); continue }
+      const value = hit[1].trim()
+      // 空值与被模板原样保留的提示词都不算填。
+      if (!value || value.startsWith('（') || value === '无内容') empty.push(label)
+    }
+    if (missing.length) {
+      fail('E_CARD_FIELD', rel, `缺 ${missing.length} 个字段标签（${missing.slice(0, 4).join('、')}${missing.length > 4 ? ' 等' : ''}），照模板补齐`)
+    }
+    if (empty.length) {
+      fail('E_CARD_FIELD', rel, `${empty.length} 个字段有标签无内容（${empty.slice(0, 4).join('、')}${empty.length > 4 ? ' 等' : ''}）；填「无（第 N 章）」也不要留空`)
+    }
+  }
+
   // 表头与表体
   const tableOf = (rel) => {
     if (rel === '故事底本/故事剧情/分卷总表.md') return '分卷总表'
@@ -233,9 +287,11 @@ export async function validateOutput({ root, mode = 'deliver' }) {
         }
       })
     }
-    // 取值枚举（Q-23）：章末钩型与爽点标记；「（待填）」骨架态与空格不报，合法＝以枚举值开头。
-    for (const [name, values] of [['章末钩型', ENUMS.钩型], ['爽点标记', ENUMS.爽点标记]]) {
+    // 取值枚举（Q-23）：情绪、章末钩型与爽点标记；「（待填）」骨架态与空格不报，合法＝以枚举值开头。
+    // 「情绪」此前漏在校验之外（ENUMS.情绪 定义了却没人用），填任意词都不会变红。
+    for (const [name, values] of [['情绪', ENUMS.情绪], ['章末钩型', ENUMS.钩型], ['爽点标记', ENUMS.爽点标记]]) {
       const idx = recordCols.indexOf(name)
+      if (idx < 0) continue
       rows.forEach((r, i) => {
         const cell = String(r[idx] ?? '').trim()
         if (!cell || cell.includes('待填')) return
@@ -311,10 +367,11 @@ export async function validateOutput({ root, mode = 'deliver' }) {
     }
     const rowsN = table?.rows.length ?? 0
     indexInfo[name] = { rows: table?.rows ?? [], count, files: count }
-    // 集合零产出必须报错：卡片数与索引行数都为 0 时「相等」是空转，等于「设定库这一块没做」也能过交付。
+    // 集合零产出必须报：卡片数与索引行数都为 0 时「相等」是空转，等于「设定库这一块没做」也能过交付。
     // 真书实测：5 张集合索引全空、实体卡一个不建，交付校验照样通过。
+    // 但「这一块还没做」与「填错了」不是一回事：进度模式下它是未完成，降为警告（W_INDEX_EMPTY）。
     if (count === 0 && rowsN === 0) {
-      fail('E_INDEX', rel, `集合「${name}」为空：索引 0 行且没有任何条目卡，至少建一张卡并登记一行`)
+      pending('E_INDEX', 'W_INDEX_EMPTY', rel, `集合「${name}」为空：索引 0 行且没有任何条目卡，至少建一张卡并登记一行`)
     } else if (table && rowsN !== count) {
       fail('E_INDEX', rel, `索引 ${rowsN} 行，条目文件 ${count} 个，应为相等（主角一行计一文件夹）`)
     }
@@ -421,6 +478,8 @@ export async function validateOutput({ root, mode = 'deliver' }) {
       let missing = 0
       let claims = 0
       let quoted = 0
+      let proseClaims = 0
+      let proseQuoted = 0
       let section = ''
       const samples = []
       for (const line of text.split(/\r?\n/)) {
@@ -440,7 +499,8 @@ export async function validateOutput({ root, mode = 'deliver' }) {
           if ([...t.replace(/[\s\p{P}]/gu, '')].length < QUOTE_RULE.散文最短结论长度) continue
           if (QUOTE_RULE.coordinateSections.includes(section)) continue
           claims += 1
-          if (QUOTE_PATTERN.test(t)) quoted += 1
+          proseClaims += 1
+          if (QUOTE_PATTERN.test(t)) { quoted += 1; proseQuoted += 1 }
           continue
         }
         const body = t.replace(/^-\s*/, '').trim()
@@ -468,13 +528,23 @@ export async function validateOutput({ root, mode = 'deliver' }) {
           warn('W_QUOTE', rel, `${claims} 条引述型结论中仅 ${quoted} 条带原文引句（${Math.round(coverage * 100)}% < ${Math.round(QUOTE_RULE.minCoverage * 100)}%），抽读时核对`)
         }
       }
+      // T1：散文件（结论以段落而非「-」列表写出）单独报一次，让这部分内容可统计。
+      // 目的不是判它差——散文本身是合法写法——而是让「哪几个文件主要靠散文撑起来」在交付报告里看得见。
+      // 只报一句、按文件汇总，不逐行刷屏：真书实测逐行报会在 49 个文件各报一次，等于全片报警。
+      if (proseClaims >= QUOTE_RULE.minClaims) {
+        const proseCoverage = proseQuoted / proseClaims
+        if (proseCoverage < QUOTE_RULE.minCoverage) {
+          warn('W_PROSE', rel, `${proseClaims} 条散文结论中仅 ${proseQuoted} 条嵌原文引句（${Math.round(proseCoverage * 100)}%），该文件主要靠散文承载结论，抽读时优先看`)
+        }
+      }
     }
   }
 
   const errors = problems.filter((p) => p.severity === 'error')
   const warnings = problems.filter((p) => p.severity === 'warning')
-  // 评审 P11：进度模式「不阻断」——ok 只在产物结构无效（E_MANIFEST）时为 false，其余错误进 data 供查看。
-  if (mode === 'progress' && !errors.some((e) => e.code === 'E_MANIFEST')) errors.length = 0
+  // 进度模式「不阻断」：产物结构有效（有 manifest）就退 0，未完成项已在上游降为警告。
+  // 这里不再清 errors —— data.errors 必须永远等于 problems 里 severity=error 的条数。
+  const structural = errors.some((e) => e.code === 'E_MANIFEST')
   const batchDone = (manifest.batches ?? []).filter((b) => b.status === 'done').length
   const batchTotal = (manifest.batches ?? []).length
   let verdict
@@ -483,7 +553,7 @@ export async function validateOutput({ root, mode = 'deliver' }) {
   else if (warnings.length) verdict = '需修改'
   else verdict = '通过'
   return {
-    ok: errors.length === 0,
+    ok: mode === 'progress' ? !structural : errors.length === 0,
     errors: problems,
     data: {
       verdict, mode, bookType,
