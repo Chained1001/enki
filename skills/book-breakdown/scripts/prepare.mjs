@@ -451,7 +451,14 @@ function authorNotesText(notes) {
 function planBatches(chapters, volumes) {
   const batches = []
   for (const v of volumes) {
-    const list = chapters.filter((c) => c.no >= v.startCh && c.no <= v.endCh).map((c) => c.no)
+    // 前言不占批位（#4 实测）：第 0 章是题记/献词，不是正文，但它挂着章号，
+    // 若照常计入就会顶掉一个名额——龙族2 正文正好 20 章（单批上限 20），
+    // 被前言挤成 [0-19] + [20-20]，凭空多出一批只装 1 章的工作量。
+    // 判据与骨架/标题计数处保持一致（no===0 且 title==='前言'），不新造字段。
+    const list = chapters
+      .filter((c) => c.no >= v.startCh && c.no <= v.endCh)
+      .filter((c) => !(c.no === 0 && c.title === '前言'))
+      .map((c) => c.no)
     for (let i = 0; i < list.length; i += THRESHOLDS.单批章数上限) {
       batches.push({
         volumeNo: v.no,

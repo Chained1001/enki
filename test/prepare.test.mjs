@@ -599,6 +599,31 @@ test('prepare 返回批数＝manifest 批数（「规模预告」行的数据源
 })
 
 
+test('前言不占批位：20 章正文＋前言应切 1 批，不能切成 [0-19]+[20] 两批（#4 实测）', async () => {
+  // 龙族2 实测：正文正好 20 章（单批上限 20），前言因挂着第 0 章号被算进批内，
+  // 把本应 1 批的工作切成 2 批，第二批只装 1 章——凭空多出一个会话单位的成本。
+  const lines = ['前言部分，交代背景。', '']
+  for (let i = 1; i <= 20; i++) lines.push(`第${i}章 标题${i}`, '', `正文第${i}段。`, '')
+  const text = lines.join('\n')
+  await withDir('prepare-batch-preface', async ({ dir }) => {
+    const src = await writeSample(dir, '二十章书.txt', text)
+    const r = await prepare({ input: src })
+    const manifest = JSON.parse(readFileSync(join(r.outDir, '工作', 'manifest.json'), 'utf8'))
+    assert.equal(manifest.chapterCount, 21, '前言＋20 章＝21 条')
+    assert.equal(manifest.batches.length, 1, '正文 20 章应正好 1 批（前言不占名额）')
+    assert.equal(manifest.batches[0].startCh, 1, '批从正文第 1 章起，不含前言')
+    assert.equal(manifest.batches[0].endCh, 20, '批到正文第 20 章止')
+    // 反向：21 章正文才该切 2 批——证明上限仍是 20，没被顺手放宽。
+    const more = ['前言部分，交代背景。', '']
+    for (let i = 1; i <= 21; i++) more.push(`第${i}章 标题${i}`, '', `正文第${i}段。`, '')
+    const src2 = await writeSample(dir, '二十一章书.txt', more.join('\n'))
+    const r2 = await prepare({ input: src2 })
+    const m2 = JSON.parse(readFileSync(join(r2.outDir, '工作', 'manifest.json'), 'utf8'))
+    assert.equal(m2.batches.length, 2, '正文 21 章应切 2 批')
+    assert.deepEqual(m2.batches.map((b) => [b.startCh, b.endCh]), [[1, 20], [21, 21]])
+  })
+})
+
 test('Q-25 收窄：例行附注丢弃计数、结构附注归集、正文干净', async () => {
   const text = [
     '第一章 一', '正文。',
