@@ -61,6 +61,37 @@
 | `npm run validate` | 退出码为 0 |
 | `npm test` | 退出码为 0 |
 
+### 真书规模断言（`test/realbook-scale.test.mjs`）
+
+把十本实测书的（类型、章数、卷数、均章）写成断言，判定逻辑一漂移就变红。原文不入库，测试在运行时读主机上的原文；目录不存在或缺某本书时，对应用例 `skip` 并写明原因，不会误报失败。
+
+原文目录默认为 `C:/Users/22940/Desktop/开发/辅助内容/小说原文`，可用 `ENKI_REALBOOK_DIR` 覆盖：
+
+```powershell
+$env:ENKI_REALBOOK_DIR = 'D:\小说原文'; npm test
+```
+
+基线来自同一条检测流水线（`detectChapters` → `detectVolumes` → `detectBookType`），均章口径为「正文单元字数之和 ÷ 正文单元数（不含前言）」，与 `detectBookType` 内部一致。**改动阈值或判定条件后若这些用例变红，先确认是想要的行为变更，再更新基线数字**——不要为了让测试变绿去改断言。
+
+新增实测书时，用下面的脚本采集数字再填进 `BASELINE`：
+
+```js
+// 放到仓库内任意位置执行：node collect.mjs
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { detectBookType, detectChapters, detectVolumes }
+  from 'file:///C:/Users/22940/Desktop/开发/网文拆书/Enki/skills/book-breakdown/scripts/prepare.mjs'
+const SRC = process.env.ENKI_REALBOOK_DIR ?? 'C:/Users/22940/Desktop/开发/辅助内容/小说原文'
+for (const f of readdirSync(SRC).filter((x) => x.endsWith('.txt'))) {
+  const text = readFileSync(join(SRC, f), 'utf8')
+  const chapters = detectChapters(text)
+  const volumes = detectVolumes(chapters, text.split(/\r?\n/))
+  const units = chapters.filter((c) => !(c.no === 0 && c.title === '前言'))
+  const avg = units.length ? Math.round(units.reduce((s, c) => s + c.chars, 0) / units.length) : 0
+  console.log(`  { file: '${f}', bookType: '${detectBookType(chapters)}', chapterCount: ${chapters.length}, volumeCount: ${volumes.length}, avg: ${avg} },`)
+}
+```
+
 ## 提交
 
 提交信息按 `docs/规范/04-提交与分支.md`。
