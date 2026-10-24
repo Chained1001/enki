@@ -14,7 +14,7 @@ import { prepare } from '../skills/book-breakdown/scripts/prepare.mjs'
 import { validateOutput } from '../skills/book-breakdown/scripts/validate-output.mjs'
 import { SECTIONS, tableColumns } from '../skills/book-breakdown/scripts/contract.mjs'
 
-const quote = '（第 1 章：「你好。」）'
+const quote = '（第 1 章：「张三，把刀放下。」）'
 const line = (text) => `- ${text}${quote}`
 
 // 两卷网文：第二卷的章号从 1 重启（restartVolumes 的判据），均章足够短所以判为网文。

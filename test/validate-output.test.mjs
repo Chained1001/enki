@@ -17,7 +17,9 @@ const NOVEL = [
   '第五章 归途', '各自归途。', '',
 ].join('\n')
 
-const quote = '（第 1 章：「你好。」）'
+// 引句要带具体名词（T18 的 W_QUOTE_WEAK 闸门）：夹具代表「填得好的产物」，
+// 「你好。」这类换个书名照样成立的句子正是闸门要挑的，不能拿它当填充。
+const quote = '（第 1 章：「张三，把刀放下。」）'
 const line = (text) => `- ${text}${quote}`
 
 function tableFile(name, columnsKey, rows) {
@@ -123,7 +125,7 @@ async function makeFilledProduct() {
     ['说话风格与人设锚点', v('笑着说话')], ['体貌锚点', v('瘦高')], ['衣着与装束', v('青衫')],
     ['神态与动作锚', v('摸鼻子')], ['外在目标（要什么）', v('求道')], ['内在缺口（缺什么）', v('怕被抛下')],
     ['致命弱点（会毁在哪）', v('心软')], ['原型词/功能位', '挚友'], ['结局状态与死亡/退场章', '在世（未完）'],
-    ['金句锚', v('「走吧。」')],
+    ['金句锚', v('「张三那把刀，我一直替他留着。」')],
   ]))
   await writeRel('故事底本/全书设定/人物/次要角色/王五.md', card('王五', [
     ['姓名（主名）', '王五'], ['别称与马甲', '无'], ['归属势力', '无'], ['力量/成长坐标', v('原文未写')],
@@ -131,7 +133,7 @@ async function makeFilledProduct() {
     ['说话风格与人设锚点', v('沉默')], ['体貌锚点', v('原文未写')], ['衣着与装束', v('原文未写')],
     ['神态与动作锚', v('原文未写')], ['外在目标（要什么）', v('原文未写')], ['内在缺口（缺什么）', v('原文未写')],
     ['致命弱点（会毁在哪）', v('原文未写')], ['原型词/功能位', '路人'], ['结局状态与死亡/退场章', '在世（未完）'],
-    ['金句锚', v('「嗯。」')],
+    ['金句锚', v('「张三的刀，我不碰。」')],
   ]))
   await writeRel('故事底本/全书设定/势力与组织/门派/青云门.md', card('青云门', [
     ['名称与俗称', '青云门'], ['性质类型', '门派'], ['所在地/据点', '青云山'], ['层级结构', v('掌门—长老—弟子')],
@@ -733,5 +735,85 @@ test('T14：产物契约版本与校验器不一致时给提示，但不改判�
     const back = await validateOutput({ root: out })
     assert.ok(!back.errors.some((e) => e.code === 'W_CONTRACT_VERSION'))
     assert.ok(CONTRACT_VERSION)
+  })
+})
+
+test('T17：相邻幕出口情绪与下一幕入幕情绪同值且无承接说明时报 W_ACT_HOOK', async () => {
+  await withFilled(async (out) => {
+    const a1 = '故事底本/故事剧情/幕纲/卷01-幕01-相遇弧.md'
+    const a2 = '故事底本/故事剧情/幕纲/卷01-幕02-风波弧.md'
+    const base = await readFile(join(out, a1), 'utf8')
+
+    // 幕1 出口＝扬，幕2 入幕＝扬：同值接续，两幕都没写承接理由 → 报
+    await writeFile(join(out, a1), base.replace(
+      /## 情绪基调与走向\n\n[^\n]*/,
+      '## 情绪基调与走向\n\n入幕：抑；幕中峰值：扬；出口：扬',
+    ), 'utf8')
+    const b2 = await readFile(join(out, a2), 'utf8')
+    await writeFile(join(out, a2), b2.replace(
+      /## 情绪基调与走向\n\n[^\n]*/,
+      '## 情绪基调与走向\n\n入幕：扬；幕中峰值：抑；出口：抑',
+    ), 'utf8')
+
+    const r1 = await validateOutput({ root: out })
+    const hooks = r1.errors.filter((e) => e.code === 'W_ACT_HOOK')
+    assert.equal(hooks.length, 1, '同值接续且无说明应恰报一条')
+    assert.equal(hooks[0].severity, 'warning', '这是提示不是错误：情绪走势要看剧情')
+    assert.match(hooks[0].message, /同为「扬」/)
+
+    // 写明承接理由即消
+    await writeFile(join(out, a2), (await readFile(join(out, a2), 'utf8')).replace(
+      '入幕：扬；幕中峰值：抑；出口：抑',
+      '入幕：扬（承接上一幕战果）；幕中峰值：抑；出口：抑',
+    ), 'utf8')
+    const r2 = await validateOutput({ root: out })
+    assert.ok(!r2.errors.some((e) => e.code === 'W_ACT_HOOK'), '写了承接理由就不该再报')
+
+    // 有落差（扬→抑）不报：落差正是幕间该有的东西
+    await writeFile(join(out, a1), base.replace(
+      /## 情绪基调与走向\n\n[^\n]*/,
+      '## 情绪基调与走向\n\n入幕：抑；幕中峰值：扬；出口：扬',
+    ), 'utf8')
+    await writeFile(join(out, a2), b2.replace(
+      /## 情绪基调与走向\n\n[^\n]*/,
+      '## 情绪基调与走向\n\n入幕：抑；幕中峰值：扬；出口：扬',
+    ), 'utf8')
+    const r3 = await validateOutput({ root: out })
+    assert.ok(!r3.errors.some((e) => e.code === 'W_ACT_HOOK'), '扬→抑 是正常落差，不该报')
+  })
+})
+
+test('T18：引句里没有具体名词时报 W_QUOTE_WEAK（换个书名照样成立）', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/人物/主要配角/李四.md'
+    const orig = await readFile(join(out, rel), 'utf8')
+    // 造三条带章号的结论，引句全是纯抒情（无人名/地名/器物/数字）
+    await writeFile(join(out, rel), `${orig}\n\n## 内容\n\n- 性格底色：他是个温和的人（第 1 章：「我累了。」）\n- 处事方式：遇事先退一步（第 2 章：「算了罢。」）\n- 与人相处：不爱争辩（第 3 章：「随你去。」）\n`, 'utf8')
+    const r1 = await validateOutput({ root: out })
+    const weak = r1.errors.filter((e) => e.code === 'W_QUOTE_WEAK')
+    assert.equal(weak.length, 1, '三条可替换引句应汇总报一条')
+    assert.equal(weak[0].severity, 'warning')
+    assert.match(weak[0].message, /没有具体名词/)
+    assert.match(weak[0].message, /换个书名照样成立/)
+
+    // 换成含具体名词的引句 → 不报
+    await writeFile(join(out, rel), `${orig}\n\n## 内容\n\n- 性格底色：他是个温和的人（第 1 章：「这城我不降。」）\n- 处事方式：遇事先退一步（第 2 章：「三日后再说。」）\n- 与人相处：不爱争辩（第 3 章：「那把剑你拿走。」）\n`, 'utf8')
+    const r2 = await validateOutput({ root: out })
+    assert.ok(!r2.errors.some((e) => e.code === 'W_QUOTE_WEAK'), '含具体名词的引句不该被判弱')
+
+    await writeFile(join(out, rel), orig, 'utf8')
+  })
+})
+
+test('T18：W_QUOTE_WEAK 不改交付判定（只警告）', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/人物/主要配角/李四.md'
+    const orig = await readFile(join(out, rel), 'utf8')
+    await writeFile(join(out, rel), `${orig}\n\n## 内容\n\n- 性格底色：温和（第 1 章：「我累了。」）\n- 处事方式：先退（第 2 章：「算了罢。」）\n- 与人相处：不争（第 3 章：「随你去。」）\n`, 'utf8')
+    const r = await validateOutput({ root: out })
+    assert.ok(r.errors.some((e) => e.code === 'W_QUOTE_WEAK'), '应有该警告')
+    assert.equal(r.data.errors, 0, '警告不计入 errors，产物仍算通过')
+    assert.ok(r.ok)
+    await writeFile(join(out, rel), orig, 'utf8')
   })
 })

@@ -465,6 +465,37 @@ export async function validateOutput({ root, mode = 'deliver' }) {
             if (arcCol !== -1 && !volArcs.has(a)) warn('W_ARC_REF', actRel, `幕纲弧号 ${a} 在卷纲弧清单中不存在`)
           }
         }
+
+        // 幕末衔接（T17）：相邻两幕的「出口情绪」与下一幕「入幕情绪」是同一取值、且两幕都没写承接理由时提示。
+        // 只警告不改判定——情绪走势合理与否要看剧情，脚本只能发现「该说明的没说」。
+        // 不报「扬→抑」这类落差：落差是正常写法，正是幕与幕之间该有的东西。
+        // 同值接续也常常是对的（一场大战拆成两幕，情绪当然连得住），所以判定要留出口：
+        // 任一幕的「情绪基调与走向」段里写了承接类说明，即视为已交代，不再提示。
+        const ACT_SEAM_NOTE = /承接|衔接|接上|延续|落差|转折|未收|延续至|直接切|硬切|同值|连场/
+        const actTone = []
+        for (const actRel of volActFiles) {
+          const actText = texts.get(actRel) ?? await readFile(join(root, actRel), 'utf8')
+          const tone = sectionText(actText, '情绪基调与走向')
+          if (!tone) continue
+          const spanLine = /起止章[：:]\s*([^\n]*)/.exec(actText)?.[1] ?? ''
+          const start = Number((/\d+/.exec(spanLine) ?? [])[0] ?? NaN)
+          // 三锚点里只取「入幕」「出口」；峰值不参与衔接比对
+          const pick = (label) => {
+            const m = new RegExp(`${label}\\s*[：:]?\\s*([^\\n；;，,）)]{0,24})`).exec(tone)
+            if (!m) return null
+            return ENUMS.情绪.find((e) => m[1].includes(e)) ?? null
+          }
+          actTone.push({ rel: actRel, start: Number.isFinite(start) ? start : null, enter: pick('入幕'), exit: pick('出口'), tone })
+        }
+        // 有起止章的按章号排；没有的保持文件名序（「卷NN-幕NN-」本身自带顺序）
+        actTone.sort((a, b) => (a.start ?? Infinity) - (b.start ?? Infinity))
+        for (let i = 0; i + 1 < actTone.length; i += 1) {
+          const cur = actTone[i]
+          const next = actTone[i + 1]
+          if (!cur.exit || !next.enter || cur.exit !== next.enter) continue
+          if (ACT_SEAM_NOTE.test(cur.tone) || ACT_SEAM_NOTE.test(next.tone)) continue
+          warn('W_ACT_HOOK', next.rel, `上一幕出口情绪与这一幕入幕情绪同为「${cur.exit}」，两幕之间既无情绪落差也没写承接说明；补一句承接理由，或复核其中一处取值`)
+        }
       }
     }
   } else {
@@ -489,10 +520,12 @@ export async function validateOutput({ root, mode = 'deliver' }) {
       let missing = 0
       let claims = 0
       let quoted = 0
+      let weak = 0
       let proseClaims = 0
       let proseQuoted = 0
       let section = ''
       const samples = []
+      const weakSamples = []
       for (const line of text.split(/\r?\n/)) {
         const h = /^#{2,3}\s+(.+?)\s*$/.exec(line.trim())
         if (h) { section = h[1]; continue }
@@ -530,9 +563,26 @@ export async function validateOutput({ root, mode = 'deliver' }) {
         if (QUOTE_RULE.dutyNote.test(body)) continue
         if (QUOTE_RULE.enumeration(body)) continue
         claims += 1
-        if (QUOTE_PATTERN.test(t)) quoted += 1
+        const hasQuote = QUOTE_PATTERN.test(t)
+        if (hasQuote) {
+          quoted += 1
+          // T18：引句不可替代性。深度闸门不用「有没有带章号」（那是 E_SOURCE 的事），
+          // 而用「换个书名这句话还成立吗」——引句里没有任何具体名词（人名、地名、器物、数字）时，
+          // 它证明不了你读过这一本，只是一句放之四海皆可的抒情。
+          // 只警告：很多好引句确实靠语气取胜，脚本判不了那种；这里只把「明显可替换」的挑出来。
+          // 关键：只对**引号内**的文字判，不能对整行判——整行含「第 1 章」，
+          // 而「一」是中文数字，会让每一行都判成「具体」，闸门等于失效。
+          const inner = (QUOTE_PATTERN.exec(t) ?? [''])[0].slice(1, -1)
+          if (inner && !QUOTE_RULE.concrete.test(inner)) {
+            weak += 1
+            if (weakSamples.length < 3) weakSamples.push(inner.slice(0, 40))
+          }
+        }
       }
       if (missing) fail('E_SOURCE', rel, `${missing} 条结论缺「第 N 章」出处。示例：${samples.join('；')}`)
+      if (weak) {
+        warn('W_QUOTE_WEAK', rel, `${weak} 条引句里没有具体名词（人名／地名／器物／数字），换个书名照样成立，证明不了读过这本。示例：${weakSamples.join('；')}`)
+      }
       if (claims >= QUOTE_RULE.minClaims) {
         const coverage = quoted / claims
         if (coverage < QUOTE_RULE.minCoverage) {
