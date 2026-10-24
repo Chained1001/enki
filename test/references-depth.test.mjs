@@ -105,13 +105,17 @@ test('references 已搬运文件不得引用 docs/（不随技能下发）', () 
 // 差别很重要：整份豁免等于对这些文件关掉门，往里面新增不合规内容也照样过；
 // 条数上限则保证「只能变短不能变长」——新加一条不合规就超额变红，修好一条就该把上限调低。
 // 每条都要有 issue 编号（回收路径）。一个文件只登记一次，两个上限写在同一项里。
+//
+// 复选框的豁免已全部清零（#21）：65 条作者自查题搬进了 references/解读提示.md，
+// 判据文件里一条都不该再有。所以这里不再登记 checkboxes——capOf 对它一律返回 0，
+// 任何判据文件里出现一个复选框就变红。
 const GRANDFATHERED = new Map([
-  // 动作列没点名字段/产物的 S- 策略条数 + 作者自查复选框条数（#11 后续轮次逐条改写）。
-  ['人物提炼策略.md', { issue: '#11', sNoTarget: 9, checkboxes: 28 }],
-  ['伏笔识别策略.md', { issue: '#11', sNoTarget: 6, checkboxes: 4 }],
-  ['幕与节奏策略.md', { issue: '#11', sNoTarget: 5, checkboxes: 9 }],
-  ['结构拆解策略.md', { issue: '#11', sNoTarget: 7, checkboxes: 3 }],
-  ['设定提炼策略.md', { issue: '#11', sNoTarget: 9, checkboxes: 21 }],
+  // 动作列没点名字段/产物的 S- 策略条数（#11 后续轮次逐条改写）。
+  ['人物提炼策略.md', { issue: '#11', sNoTarget: 9 }],
+  ['伏笔识别策略.md', { issue: '#11', sNoTarget: 6 }],
+  ['幕与节奏策略.md', { issue: '#11', sNoTarget: 5 }],
+  ['结构拆解策略.md', { issue: '#11', sNoTarget: 7 }],
+  ['设定提炼策略.md', { issue: '#11', sNoTarget: 9 }],
   ['文风分析策略.md', { issue: '#11', sNoTarget: 7 }],
   ['拆解总策略.md', { issue: '#11', sNoTarget: 7 }],
 ])
@@ -175,6 +179,9 @@ test('判据密度：每条 S- 策略的动作列写明产出落到哪个字段�
 
 test('判据密度：作者自查复选框只允许出现在解读提示文件', () => {
   const files = readdirSync(refDir).filter((f) => f.endsWith('.md'))
+  // 解读提示文件必须真实存在：它是这 65 条自查题唯一的去处。
+  // 若文件被删，下面的循环会让所有判据文件「合规」，门就静默失效了。
+  assert.ok(files.includes('解读提示.md'), 'references/解读提示.md 必须存在——它是作者自查题唯一的去处')
   const over = []
   for (const f of files) {
     if (f === '解读提示.md') continue
@@ -189,18 +196,34 @@ test('判据密度：作者自查复选框只允许出现在解读提示文件',
   )
 })
 
+test('判据密度：解读提示文件明写不作为判定依据', () => {
+  const text = read('解读提示.md')
+  // 文件头必须声明。没有这句，agent 读到一堆「…吗？」仍然会拿它当判据。
+  assert.match(text, /不作为判定依据/, '解读提示文件头必须明写「不作为判定依据」')
+  // 声明要在正文之前（前 20 行内），不能藏在文末
+  const head = text.split(/\r?\n/).slice(0, 20).join('\n')
+  assert.match(head, /不作为判定依据/, '这句声明必须在文件头，不能藏在文末')
+})
+
 test('判据密度：白名单只能变短，不能变长', () => {
   // 引入门时把存量登记进 GRANDFATHERED 是必要的；但若允许继续加，白名单就成了永久豁免。
   // 这条测试把「当前条数」写死，加条目即变红，逼着走「先修内容再删条目」的路。
+  // 上限从 11 降到 7（#21）：复选框搬走后，只剩 sNoTarget 一个维度，7 个文件各登一次。
   assert.ok(
-    GRANDFATHERED.size <= 11,
-    `GRANDFATHERED 只允许变短。当前 ${GRANDFATHERED.size} 条，上限 11 条——新增豁免须先修内容`,
+    GRANDFATHERED.size <= 7,
+    `GRANDFATHERED 只允许变短。当前 ${GRANDFATHERED.size} 条，上限 7 条——新增豁免须先修内容`,
   )
   for (const [file, spec] of GRANDFATHERED) {
     assert.match(String(spec.issue), /^#\d+$/, `${file} 的豁免理由须是 issue 编号（如 #11），否则没有回收路径`)
     for (const k of ['sNoTarget', 'checkboxes']) {
       if (spec[k] !== undefined) assert.ok(Number.isInteger(spec[k]) && spec[k] >= 0, `${file} 的 ${k} 上限须是非负整数`)
     }
+    // 复选框维度已经清零（#21），任何文件都不许再登记这一项豁免。
+    assert.equal(
+      spec.checkboxes,
+      undefined,
+      `${file} 不该再登记 checkboxes 豁免——65 条自查题已搬进 references/解读提示.md，判据文件里一个都不该有`,
+    )
   }
 })
 
