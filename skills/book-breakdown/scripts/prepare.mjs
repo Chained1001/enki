@@ -530,7 +530,10 @@ function volumeFileName(v) {
   return `卷${String(v.no).padStart(2, '0')}-${safe}.md`
 }
 
-// 生成全部待写文件：相对路径 → 内容。出版书无分卷总表/卷纲，幕纲骨架按原文单元生成。
+// 生成全部待写文件：相对路径 → 内容。
+// 两类书都建卷纲与分卷总表；区别只在幕怎么落：
+//   网文——幕＝卷内事件弧，卷纲由拆解者按事件弧填，幕纲由卷循环逐幕生成；
+//   出版书——幕＝原文单元，卷纲由脚本按原文单元的章节区间预置，幕纲一份对应一个原文单元。
 export function buildArtifacts({ book, sourceName, chapters, volumes, bookType, fp, notes }) {
   const plan = productPlan({ bookType })
   const files = new Map()
@@ -558,14 +561,24 @@ export function buildArtifacts({ book, sourceName, chapters, volumes, bookType, 
   }
   files.set('故事底本/全书设定/人物/人物关系.md', tableSkeleton('人物关系', tableColumns('人物关系')))
 
-  if (bookType === '网文') {
-    files.set('故事底本/故事剧情/分卷总表.md', tableSkeleton('分卷总表', tableColumns('分卷总表')))
-    for (const v of volumes) files.set(`故事底本/故事剧情/卷纲/${volumeFileName(v)}`, mdSkeleton(`卷纲 ${v.name}`, SECTIONS.卷纲))
-  } else {
+  // 卷层：两类书都建。网文卷纲的「事件弧清单」由拆解者填（脚本给不出事件弧）；
+  // 出版书卷纲的幕清单可以由脚本预置——幕＝原文单元，章节区间在切章时已确定，
+  // 这里只是把它写下来，不涉及判断。
+  files.set('故事底本/故事剧情/分卷总表.md', tableSkeleton('分卷总表', tableColumns('分卷总表')))
+  for (const v of volumes) files.set(`故事底本/故事剧情/卷纲/${volumeFileName(v)}`, mdSkeleton(`卷纲 ${v.name}`, SECTIONS.卷纲))
+
+  if (bookType === '出版') {
+    // 出版书：幕＝原文单元。幕纲文件名带所属卷号，与网文的「幕纲/卷NN-幕NN-名称.md」同形，
+    // 这样校验器不必为两类书写两套树形判断。
     const units = chapters.filter((c) => !(c.no === 0 && c.title === '前言'))
     units.forEach((c, k) => {
       const safe = c.title.replace(/[\\/:*?"<>|]/g, '_')
-      files.set(`故事底本/故事剧情/幕纲/幕${String(k + 1).padStart(2, '0')}-${safe}.md`, mdSkeleton(`幕纲 ${c.title}`, SECTIONS.幕纲))
+      const vol = volumes.find((v) => c.no >= v.startCh && c.no <= v.endCh) ?? volumes[0]
+      const volNo = String(vol?.no ?? 1).padStart(2, '0')
+      files.set(
+        `故事底本/故事剧情/幕纲/卷${volNo}-幕${String(k + 1).padStart(2, '0')}-${safe}.md`,
+        mdSkeleton(`幕纲 ${c.title}`, SECTIONS.幕纲),
+      )
     })
   }
   return { plan, files }

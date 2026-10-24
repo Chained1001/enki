@@ -223,17 +223,23 @@ test('卷末总结行作卷界而非卷首（绍宋形态）', async () => {
   assert.ok(vols.every((v) => v.endCh >= v.startCh), '不得出现倒挂区间')
 })
 
-test('出版书判定与降级目录（龙族形态）', async () => {
+test('出版书建卷层，幕＝原文单元（#12 行为变更：原先不建卷纲）', async () => {
   const unit = (n, name) => `第${n}幕 ${name}\n${'他说话了，声音很轻。'.repeat(2000)}\n`
   const text = unit('一', '开端') + '\n' + unit('二', '转折') + '\n' + unit('三', '收束')
   await withDir('prepare-pub', async ({ dir }) => {
     const src = await writeSample(dir, '出版书.txt', text)
     const r = await prepare({ input: src })
     assert.equal(r.bookType, '出版')
-    assert.ok(!existsSync(join(r.outDir, '故事底本', '故事剧情', '分卷总表.md')), '出版书不建分卷总表')
-    assert.ok(!existsSync(join(r.outDir, '故事底本', '故事剧情', '卷纲')), '出版书不建卷纲')
+    // 卷是结构单位，出版书也有卷（实测龙族3 检出 4 卷、龙族1/2 单卷「全书」）。
+    // 原先这两条断言的是「出版书不建分卷总表／不建卷纲」，那是被 bookType 分支砍掉的行为，已改。
+    assert.ok(existsSync(join(r.outDir, '故事底本', '故事剧情', '分卷总表.md')), '出版书也建分卷总表')
+    assert.ok(existsSync(join(r.outDir, '故事底本', '故事剧情', '卷纲')), '出版书也建卷纲目录')
+    const volFiles = (await readdir(join(r.outDir, '故事底本', '故事剧情', '卷纲'))).filter((f) => f.endsWith('.md'))
+    assert.equal(volFiles.length, r.volumes.length, '每卷一份卷纲')
+    // 幕纲＝原文单元，且文件名带所属卷号（与网文同形，校验器不必分两套树形判断）
     const acts = (await readdir(join(r.outDir, '故事底本', '故事剧情', '幕纲'))).filter((f) => f.endsWith('.md'))
     assert.equal(acts.length, 3, '出版书幕纲＝原文单元数')
+    assert.ok(acts.every((f) => /^卷\d{2}-幕\d{2}-/.test(f)), `幕纲文件名须为「卷NN-幕NN-名称.md」，实际：${acts.join('、')}`)
   })
 })
 

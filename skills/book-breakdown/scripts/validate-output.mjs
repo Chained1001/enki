@@ -630,9 +630,25 @@ export async function validateOutput({ root, mode = 'deliver' }) {
       }
     }
   } else {
+    // 出版书：卷层与网文同形，只是幕的口径不同——幕＝原文单元，不是事件弧。
+    // 因此这里不查「弧数＝幕数」（出版书不拆事件弧，那个等式没有意义），
+    // 而查「全部幕纲份数＝原文单元数」，并且逐卷核幕纲确实挂在所属卷下。
     const units = (manifest.chapters ?? []).filter((c) => !(c.no === 0 && c.title === '前言')).length
     if (actFiles.length !== units) {
       fail('E_ACTS', '故事底本/故事剧情/幕纲/', `出版书幕纲 ${actFiles.length} 份，应为 ${units} 份（＝原文单元数）`)
+    }
+    // 每卷都要有卷纲，且该卷的原文单元至少产出一份幕纲。
+    for (const v of manifest.volumes ?? []) {
+      const volRel = `故事底本/故事剧情/卷纲/卷${String(v.no).padStart(2, '0')}-`
+      const volFile = actual.find((f) => f.rel.startsWith(volRel))
+      const prefix = `故事底本/故事剧情/幕纲/卷${String(v.no).padStart(2, '0')}-`
+      const n = actFiles.filter((f) => f.startsWith(prefix)).length
+      if (!volFile) {
+        pending('E_VOLUME_MISSING', 'W_VOLUME_MISSING', '故事底本/故事剧情/卷纲/', `出版书卷${v.no}（${v.name}）没有卷纲文件`)
+      }
+      if (n === 0) {
+        pending('E_VOLUME_MISSING', 'W_VOLUME_MISSING', prefix, `出版书卷${v.no}（${v.name}）没有幕纲文件（应按原文单元逐份生成）`)
+      }
     }
   }
 

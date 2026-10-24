@@ -338,11 +338,15 @@ export function styleSkeleton(fingerprintText) {
 
 // ---------- 产物目录契约 ----------
 
-// 固定文件与目录（相对产物根）。bookType 出版时无分卷总表与卷纲，幕纲挂全书（PRD D-09/Q-16）。
+// 固定文件与目录（相对产物根）。
+// 两类书都建卷层（分卷总表＋卷纲目录）：卷是结构单位，出版书也有卷——
+// 实测龙族3 检测出 4 卷，龙族1/2 是单卷「全书」，先前那层是被 bookType 分支砍掉的，不是书里没有。
+// 幕的**表达**两类不同：网文幕＝卷内事件弧；出版书幕＝原文单元，幕纲挂在所属卷纲下。
 export function productPlan({ bookType = '网文' } = {}) {
   const dirs = [
     '原文/章节',
     '工作',
+    '故事底本/故事剧情/卷纲',
     '故事底本/故事剧情/幕纲',
     '故事底本/全书设定/专题',
     ...Object.entries(COLLECTIONS).flatMap(([name, types]) =>
@@ -356,6 +360,7 @@ export function productPlan({ bookType = '网文' } = {}) {
     '故事底本/故事剧情/全书大纲.md',
     '故事底本/故事剧情/伏笔台账.md',
     '故事底本/故事剧情/开篇三章.md',
+    '故事底本/故事剧情/分卷总表.md',
     '故事底本/全书设定/世界观.md',
     '故事底本/全书设定/金手指.md',
     '故事底本/文风.md',
@@ -363,10 +368,6 @@ export function productPlan({ bookType = '网文' } = {}) {
     ...Object.keys(COLLECTIONS).map((name) => `故事底本/全书设定/${name}/索引.md`),
     '故事底本/全书设定/人物/人物关系.md',
   ]
-  if (bookType === '网文') {
-    dirs.push('故事底本/故事剧情/卷纲')
-    files.push('故事底本/故事剧情/分卷总表.md')
-  }
   return { dirs, files }
 }
 
