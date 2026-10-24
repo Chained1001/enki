@@ -11,13 +11,14 @@
 //
 // 用法：
 //   node entity-index.mjs <产物目录> --list [--top N]   列出实体与出现次数（紧凑）
-//   node entity-index.mjs <产物目录> --entity 张三       查单个实体的章号
+//   node entity-index.mjs <产物目录> --entity 张三       查单个实体的章号（首现章以此为准，不要手数）
+//   node entity-index.mjs <产物目录> --sample 次要角色   改取证章数档位（主角/次要角色/集合条目，或 ≥2 的整数）
 //   node entity-index.mjs <产物目录> --json             输出全量 JSON
 //   node entity-index.mjs <产物目录> --out 路径.json    落盘
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { tableColumns } from './contract.mjs'
+import { tableColumns, THRESHOLDS } from './contract.mjs'
 import { writeFileAtomic } from './io.mjs'
 import { parseRow } from './validate-output.mjs'
 
@@ -142,7 +143,10 @@ export function buildIndex(lines) {
 
 // 采样建议：给一个实体的章号，挑出最值得读原文的几章（首现/末次/中段/高光）。
 // 阶段 5 的卡片只该读这几章，不该读该实体的全部出场章——主角可能出现在 600 章里。
-export function sampleChapters(list, max = 4) {
+//
+// 默认值取 contract 的「取证章数_主角」（6）：08-设定库 的表格承诺「主角 ≤6 章」，
+// 而本函数此前硬写 4，那句承诺从来没被兑现过（C-13）。次要角色/集合条目用 --sample 指定。
+export function sampleChapters(list, max = THRESHOLDS.取证章数_主角) {
   if (list.length <= max) return list.slice()
   const picked = new Set()
   picked.add(list[0]) // 首现：定义与初登场描写
@@ -155,10 +159,17 @@ export function sampleChapters(list, max = 4) {
   return [...picked].sort((a, b) => a - b)
 }
 
+// 档位名 → 上限。--sample 只认这三个键，避免随手传个 999 又把「卡片采样」变成「读全书」。
+export const SAMPLE_TIERS = {
+  主角: THRESHOLDS.取证章数_主角,
+  次要角色: THRESHOLDS.取证章数_次要角色,
+  集合条目: THRESHOLDS.取证章数_集合条目,
+}
+
 // ---------- CLI ----------
 
 function parseArgs(argv) {
-  const out = { dir: null, list: false, entity: null, json: false, out: null, top: 50 }
+  const out = { dir: null, list: false, entity: null, json: false, out: null, top: 50, sample: THRESHOLDS.取证章数_主角 }
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i]
     if (a === '--list') out.list = true
@@ -166,7 +177,20 @@ function parseArgs(argv) {
     else if (a === '--json') out.json = true
     else if (a === '--out') out.out = argv[++i]
     else if (a === '--top') out.top = Number(argv[++i])
-    else if (!a.startsWith('-')) out.dir = a
+    else if (a === '--sample') {
+      // 认三档名字，也认正整数（给「这本书主角出场太少，就采 4 章」这类临时收窄留口子）。
+      const v = argv[++i]
+      if (v in SAMPLE_TIERS) out.sample = SAMPLE_TIERS[v]
+      else if (/^\d+$/.test(v ?? '') && Number(v) >= 2) out.sample = Number(v)
+      else {
+        console.error(`--sample 取值「${v}」不合法：应为 ${Object.keys(SAMPLE_TIERS).join('/')} 或 ≥2 的整数`)
+        process.exit(2)
+      }
+    } else if (!a.startsWith('-')) out.dir = a
+    else {
+      console.error(`未知参数 ${a}。用法：node entity-index.mjs <产物目录> [--list [--top N]] [--entity 名称] [--sample 档位|N] [--json] [--out 路径]`)
+      process.exit(2)
+    }
   }
   return out
 }
@@ -174,7 +198,7 @@ function parseArgs(argv) {
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (!args.dir) {
-    console.error('用法：node entity-index.mjs <产物目录> [--list [--top N]] [--entity 名称] [--json] [--out 路径]')
+    console.error('用法：node entity-index.mjs <产物目录> [--list [--top N]] [--entity 名称] [--sample 档位|N] [--json] [--out 路径]')
     process.exit(2)
   }
 
@@ -208,7 +232,7 @@ async function main() {
     }
     console.log(`${e.名称}（${e.类型}）：出现 ${e.章号.length} 章，首现第 ${e.首现章} 章，末次第 ${e.末次章} 章`)
     console.log(`全部出场章：${e.章号.join(', ')}`)
-    console.log(`建议取证章（≤4 章，够建卡）：${sampleChapters(e.章号).join(', ')}`)
+    console.log(`建议取证章（≤${args.sample} 章，够建卡）：${sampleChapters(e.章号, args.sample).join(', ')}`)
     return
   }
 
@@ -229,7 +253,8 @@ async function main() {
       章节数: chapters,
       未填章数: pending,
       实体数: index.size,
-      实体: all.map((e) => ({ ...e, 建议取证章: sampleChapters(e.章号) })),
+      采样上限: args.sample,
+    实体: all.map((e) => ({ ...e, 建议取证章: sampleChapters(e.章号, args.sample) })),
     }
     const text = JSON.stringify(payload, null, 1)
     if (args.out) {

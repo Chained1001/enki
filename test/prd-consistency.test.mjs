@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { readFile, readdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { COLUMNS, SECTIONS } from '../skills/book-breakdown/scripts/contract.mjs'
+import { COLUMNS, SECTIONS, THRESHOLDS } from '../skills/book-breakdown/scripts/contract.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
@@ -174,5 +174,34 @@ test('workflows/ 里提到的列数/段数也须与 contract 一致', async () =
         assert.equal(claimed, n, `${f} 说${name}是 ${claimed} 列，contract 实际 ${n} 列`)
       }
     }
+  }
+})
+
+// C-13：08-设定库 的取证章数三档是给人看的承诺，脚本必须兑现同一个数。
+// 这条防的正是本次修掉的漂移——文档写「主角 ≤6 章」，脚本默认却是 4。
+test('取证章数三档：workflows 表格里的数字等于 contract 的 THRESHOLDS', async () => {
+  const text = await readFile(join(wfDir, '08-设定库.md'), 'utf8')
+  // 只在「取证上限」那张表里找：文件别处也有「主角」开头的表格行（人物提炼策略索引），
+  // 全局找第一个会匹配错行。
+  const lines = text.split(/\r?\n/)
+  const head = lines.findIndex((l) => l.includes('实体档位') && l.includes('取证章数'))
+  assert.ok(head > 0, '08-设定库 找不到「实体档位/取证章数」表头')
+  let tail = head + 1
+  while (tail < lines.length && lines[tail].trim().startsWith('|')) tail += 1
+  const tableRows = lines.slice(head, tail)
+
+  const tiers = [
+    ['主角、主要配角', '取证章数_主角'],
+    ['次要角色', '取证章数_次要角色'],
+    ['集合条目', '取证章数_集合条目'],
+  ]
+  for (const [rowName, key] of tiers) {
+    const want = THRESHOLDS[key]
+    assert.equal(typeof want, 'number', `contract 缺 ${key}`)
+    const line = tableRows.find((l) => l.includes(rowName))
+    assert.ok(line, `取证上限表里找不到「${rowName}」那一行`)
+    const m = /≤\s*(\d+)\s*章/.exec(line)
+    assert.ok(m, `「${rowName}」那行没写「≤N 章」：${line}`)
+    assert.equal(Number(m[1]), want, `08-设定库 说「${rowName}」≤${m[1]} 章，contract 是 ${want}`)
   }
 })
