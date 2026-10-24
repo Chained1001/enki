@@ -12,7 +12,7 @@ import { basename, dirname, extname, join, relative, resolve, sep } from 'node:p
 import { pathToFileURL } from 'node:url'
 import { IoError, readManifest, writeFileAtomic } from './io.mjs'
 import {
-  COLLECTIONS, COLUMNS, EMOTION_TAG_WORDS, ENUMS, FATIGUE_WORDS, PROTAGONIST_FILES, SCENE_MARKERS, SECTIONS, STAGES, THRESHOLDS, TOPICS,
+  COLLECTIONS, COLUMNS, CONTRACT_VERSION, EMOTION_TAG_WORDS, ENUMS, FATIGUE_WORDS, PROTAGONIST_FILES, SCENE_MARKERS, SECTIONS, STAGES, THRESHOLDS, TOPICS,
   mdSkeleton, outlineSkeleton, productPlan, styleSkeleton, tableColumns, tableSkeleton, topicSkeleton,
 } from './contract.mjs'
 
@@ -705,6 +705,9 @@ export async function analyze({ input, out }) {
   const manifest = {
     book,
     bookType,
+    // 产物自证按哪版契约写成（T14）。0.3.0 起卡片字段与散文引句都进校验，
+    // 旧版产物在新版校验器下的差异需要能区分「产物写错了」与「契约变了」。
+    contractVersion: CONTRACT_VERSION,
     source: { path: src, bytes: buffer.length, encoding, sha256: createHash('sha256').update(buffer).digest('hex') },
     outDir,
     totalChars: chapters.reduce((s, c) => s + c.chars, 0),
