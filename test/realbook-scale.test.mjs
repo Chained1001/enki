@@ -99,8 +99,11 @@ test('两类在均章上互不重叠（阈值漂移会先撞到这里）', { ski
   )
 })
 
-test('出版书与网文的卷层产物不同：出版书不建卷纲', { skip: !haveSource && '原文目录缺失' }, () => {
-  // 只断言判定结果的形态，不读产物目录（产物在临时目录里，测试结束即删除）。
+test('两类书的判定在八本样本上一致（类型不漂移）', { skip: !haveSource && '原文目录缺失' }, () => {
+  // 只断言判定结果，不读产物目录（产物在临时目录里，测试结束即删除）。
+  // 这里原本还声称「出版书不建卷纲」，但正文从未验证过卷层——#12 之后卷层两类书都有，
+  // 那条标题更是错的。卷层差异改由 test/publish-volume.test.mjs 与
+  // test/publish-volume-validate.test.mjs 守，本文件只管真书规模数字不漂移。
   const rows = [...BASELINE, ...EXTRA].filter(present)
   for (const b of rows) {
     const got = measure(b.file)
