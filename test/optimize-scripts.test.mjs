@@ -118,6 +118,35 @@ test('write-rows：占位符「（待填）」不算填写，报 E_FIELD', () =>
   assert.throws(() => applyRows(lines, [goodRow(1, { 地点: '（待填）' })]), (e) => e.code === 'E_FIELD')
 })
 
+// T13：有前言的书，prepare 把前言记为第 0 章，模板明写「非叙事行情绪可空」。
+// 原先 9 个字段一律必填，导致第 0 章那一行照模板填一定报 E_FIELD——20 份模板里唯一「照填必报错」的一处。
+test('write-rows：第 0 章（前言）情绪可空，其余字段仍必填', () => {
+  const lines = table(2)
+  // 造一行第 0 章（table() 从 1 起，这里手工插到表头分隔行之后，即索引 6）
+  const withCh0 = [...lines]
+  withCh0.splice(6, 0, '| 0 | 前言 | 500 | （待填） | （待填） | （待填） | （待填） | （待填） | （待填） | （待填） | （待填） | （待填） |')
+  const noEmotion = goodRow(0)
+  delete noEmotion.情绪
+  const { updated } = applyRows(withCh0, [noEmotion])
+  assert.equal(updated, 1, '前言那行不该因情绪为空被拒')
+  // 但第 0 章的其它字段照旧必填
+  const noPlace = goodRow(0)
+  delete noPlace.地点
+  assert.throws(
+    () => applyRows(withCh0, [noPlace]),
+    (e) => e.code === 'E_FIELD',
+    '只放行情绪，其余八列仍须填写',
+  )
+  // 正文章（≥1）的情绪仍然必填
+  const bodyNoEmotion = goodRow(1)
+  delete bodyNoEmotion.情绪
+  assert.throws(
+    () => applyRows(lines, [bodyNoEmotion]),
+    (e) => e.code === 'E_FIELD',
+    '正文章的情绪不能空着',
+  )
+})
+
 test('write-rows：枚举值非法报 E_ENUM，并列全枚举', () => {
   const lines = table(2)
   assert.throws(

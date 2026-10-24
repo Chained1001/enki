@@ -36,6 +36,10 @@ const ENUM_FIELDS = [
 
 const PLACEHOLDER = '（待填）'
 
+// 第 0 章（有前言时 prepare 把前言记为 0）是非叙事行，模板明写「情绪可空」。
+// 这里只放行这一个字段：其余八列仍须填写，泛化到「整行可空」等于放弃校验。
+const NON_NARRATIVE_OPTIONAL = ['情绪']
+
 class RowError extends Error {
   constructor(code, message) {
     super(message)
@@ -81,6 +85,9 @@ export function applyRows(lines, entries, { partial = false, enums = ENUMS } = {
     for (const [key] of FIELDS) {
       const has = e[key] !== undefined && e[key] !== null && String(e[key]).trim() !== ''
       if (!has) {
+        // 前言/扉页这类非叙事行（prepare 记为第 0 章）没有情绪可言，模板明写「情绪可空」。
+        // 原先 9 个字段一律必填，导致有前言的书第 0 章那一行照模板填一定报 E_FIELD。
+        if (no === 0 && NON_NARRATIVE_OPTIONAL.includes(key)) continue
         if (partial) continue
         throw new RowError('E_FIELD', `第 ${no} 章缺字段「${key}」（要只补部分列请加 --partial）`)
       }

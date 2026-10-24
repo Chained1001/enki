@@ -26,6 +26,11 @@ const CHARS_PER_TOKEN = 1.6
 // 从一段 markdown 里切出「## 」小节，返回 [{节, 起, 止, 字符数}]（行号 1 基，含首尾）。
 export function sliceSections(text) {
   const lines = text.split(/\r?\n/)
+  // 文件通常以换行结尾，split 会在末尾多出一个空元素。末节没有「下一个小标题」可以减一，
+  // 若不先削掉这个空元素，末节的止行会比真实末行多 1——按索引翻文件就会多读一个空行。
+  // 中间各节用 starts[k+1] - 1 定位，不受影响。
+  let end = lines.length
+  while (end > 0 && lines[end - 1].trim() === '') end -= 1
   const starts = []
   lines.forEach((l, i) => {
     if (/^## /.test(l)) starts.push(i)
@@ -33,7 +38,7 @@ export function sliceSections(text) {
   const out = []
   for (let k = 0; k < starts.length; k += 1) {
     const s = starts[k]
-    const e = (k + 1 < starts.length ? starts[k + 1] : lines.length) - 1
+    const e = (k + 1 < starts.length ? starts[k + 1] : end) - 1
     const title = lines[s].replace(/^##\s+/, '').trim()
     const chars = lines.slice(s, e + 1).join('\n').length
     out.push({ 节: title, 起: s + 1, 止: e + 1, 字符数: chars, 行数: e - s + 1 })
