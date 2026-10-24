@@ -721,9 +721,15 @@ export async function analyze({ input, out }) {
     // 产物自证按哪版契约写成（T14）。0.3.0 起卡片字段与散文引句都进校验，
     // 旧版产物在新版校验器下的差异需要能区分「产物写错了」与「契约变了」。
     contractVersion: CONTRACT_VERSION,
+    // 生成时间（B-06）：旧产物只有 outDir 与 source，看不出「什么时候拆的」。
+    // 时间取本机时钟，只作记录，不参与任何判定。
+    generatedAt: new Date().toISOString(),
     source: { path: src, bytes: buffer.length, encoding, sha256: createHash('sha256').update(buffer).digest('hex') },
     outDir,
+    // 总量口径（B-06）：光有 totalChars 这个数看不出它到底数了什么——
+    // 是原文全文，还是含附录、含前言、含噪音行？写清楚，别人才能核对。
     totalChars: chapters.reduce((s, c) => s + c.chars, 0),
+    totalCharsNote: '原文正文单元的字数之和：含前言（no=0，若存在），不含附录（单列在 appendix.chars）、不含已剥离的噪音行与作者的话',
     chapterCount: chapters.length,
     volumeCount: volumes.length,
     volumes,

@@ -15,7 +15,7 @@
 //   node cost.mjs <产物目录> --set    --stage 4 --in 1875000 --out 56250
 //   node cost.mjs <产物目录> --report [--json]
 //   node cost.mjs <产物目录> --check          # 供交付前调用：无计量即退出 1
-import { readFile } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { readManifest, writeFileAtomic } from './io.mjs'
@@ -94,18 +94,50 @@ function fmt(n) {
 }
 
 // 统计产物中「非原文」部分的字符数：正文产物都是 agent 产出的输出。
+// 判据看正文里还有没有占位，不看 manifest.files 的状态标签——那个标签在 prepare 时写死，
+// 之后没人更新，于是填满的文件永远挂着 skeleton，被这里跳过（实测：填完实内容后
+// 输出下界仍算成 0）。同一件事有两个事实源时，以磁盘上的内容为准。
+const PLACEHOLDER = /（待填）/
+const isUnfilled = (text) => PLACEHOLDER.test(text)
+
 async function productChars(root, manifest) {
   let sum = 0
-  for (const [rel, state] of Object.entries(manifest.files ?? {})) {
-    if (rel.startsWith('原文/')) continue // 原文是复制来的，不是模型输出
-    if (state !== 'done' && state !== 'filled' && state !== 'validated') continue
+  // 文件清单以磁盘为准，manifest.files 只用来补「有哪些文件」，不用来判状态：
+  // 产物目录里可能还有 manifest 没登记的文件（agent 新建的卡片等），漏掉它们同样会低估。
+  const rels = new Set(
+    Object.keys(manifest.files ?? {}).filter((rel) => !rel.startsWith('原文/')),
+  )
+  for (const rel of await listProductFiles(root)) rels.add(rel)
+  for (const rel of rels) {
     try {
-      sum += (await readFile(join(root, rel), 'utf8')).length
+      const text = await readFile(join(root, rel), 'utf8')
+      if (isUnfilled(text)) continue // 还是骨架，没有产出可计
+      sum += text.length
     } catch {
       // 文件缺失不计入；validate-output 会报
     }
   }
   return sum
+}
+
+// 产物目录下的 .md/.json 文件（原文/ 之外的产物）。不带进任何原文正文。
+async function listProductFiles(root) {
+  const out = []
+  const walk = async (dir, prefix) => {
+    let entries
+    try { entries = await readdir(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      const rel = prefix ? `${prefix}/${e.name}` : e.name
+      if (e.isDirectory()) {
+        if (rel === '原文') continue
+        await walk(join(dir, e.name), rel)
+      } else if (/\.(md|json)$/.test(e.name)) {
+        out.push(rel)
+      }
+    }
+  }
+  await walk(root, '')
+  return out
 }
 
 function parseArgs(argv) {

@@ -63,6 +63,24 @@ export function parseRow(line) {
   return cells
 }
 
+// 骨架态判定：正文里是否还存在「还没填」的证据。
+// 两件事要一起看，只看一件会误判：
+//   1）散文/列表骨架——正文含「（待填）」占位（引用块里的说明行不算，那是在解释占位）；
+//   2）表格骨架——表头齐了但一行数据都没有。空的 Markdown 表格本来就没有「（待填）」字样，
+//      只按占位判会把它当成「已填」，于是满屏都是「状态未更新」的假告警（实测 6 条）。
+function looksUnfilled(text, rel) {
+  const body = text.replace(/^>.*$/gm, '')
+  if (body.includes('（待填）')) return true
+  if (!rel.endsWith('.md')) return false
+  const table = firstTable(body)
+  // 只对「整份文件就是一张表」的产物这么判（索引、台账、词典、关系表）：
+  // 有标题段落的文件里，表格为空不等于文件没写。
+  if (!table) return false
+  const headings = [...body.matchAll(/^## /gm)].length
+  if (headings > 0) return false
+  return table.rows.length === 0
+}
+
 function topicVerdict(text) {
   const m = /-\s*判定：(.+)/.exec(text)
   return m ? m[1].trim() : null
@@ -178,6 +196,8 @@ export async function validateOutput({ root, mode = 'deliver' }) {
   const state = { skeleton: 0, filled: 0 }
   for (const [rel, text] of texts) {
     const product = productOf(rel)
+    // 骨架态判据是「正文里还有没有真实的（待填）占位」，不是「文件是否存在」（B-06）。
+    // 文件存在但通篇占位＝还没做；文件不存在是另一类问题（E_FILES），不混进这个计数。
     // 骨架说明行（引用块）里提到占位字样不算未填。
     const body = text.replace(/^>.*$/gm, '')
     const isSkeleton = body.includes('（待填）')
@@ -765,6 +785,36 @@ export async function validateOutput({ root, mode = 'deliver' }) {
   const structural = errors.some((e) => e.code === 'E_MANIFEST')
   const batchDone = (manifest.batches ?? []).filter((b) => b.status === 'done').length
   const batchTotal = (manifest.batches ?? []).length
+  // 状态两套账（B-06）：manifest.files 的状态是 prepare 时写死的，之后没人更新，
+  // 于是「填满的文件仍标 skeleton」或「骨架被标成 done」这类漂移一直是静默的。
+  // 这里拿磁盘内容（正文还有没有占位）与 manifest 的标签对一遍，只告警不改判定：
+  // 标签错了不影响产物本身，但它会让 cost.mjs 按状态过滤时漏算（见 cost.mjs 的注释）。
+  // 旧产物没有 manifest.files 时跳过，不当作缺陷。
+  {
+    const declared = manifest.files ?? {}
+    const known = new Set(['done', 'filled', 'skeleton', 'validated', 'pending'])
+    let drift = 0
+    for (const [rel, label] of Object.entries(declared)) {
+      if (rel.startsWith('原文/')) continue // 原文是复制来的，不做占位判定
+      if (!known.has(label)) continue
+      if (rel === '工作/manifest.json') continue
+      const entry = actual.find((f) => f.rel === rel)
+      if (!entry) continue // 文件缺失另有检查，不在这里报
+      const text = await readFile(entry.full, 'utf8')
+      const reallySkeleton = looksUnfilled(text, rel)
+      const saysSkeleton = label === 'skeleton' || label === 'pending'
+      if (reallySkeleton !== saysSkeleton) {
+        drift += 1
+        if (drift <= 5) {
+          warn('W_STATE_DRIFT', rel, saysSkeleton
+            ? `manifest 记「${label}」，但文件里已无「（待填）」占位，状态未更新`
+            : `manifest 记「${label}」，但文件里仍有「（待填）」占位，状态标早了`)
+        }
+      }
+    }
+    if (drift > 5) warn('W_STATE_DRIFT', '工作/manifest.json', `另有 ${drift - 5} 个文件状态与内容不符，未逐条列出`)
+  }
+
   let verdict
   if (mode === 'progress') verdict = '进行中'
   else if (errors.length) verdict = '不通过'

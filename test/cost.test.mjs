@@ -7,7 +7,7 @@
 // 凡需要写盘的操作一律在临时副本上做，绝不改仓库里的夹具。
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { closeSync, cpSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { closeSync, cpSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -195,6 +195,40 @@ test('CLI：记录只写 manifest 的 cost 键，不新增产物文件（工作/
     // 工作/ 目录内容不变：manifest.json、别名词典.md、逐章记录.md
     const workFiles = readdirSync(join(dir, '工作')).sort()
     assert.deepEqual(workFiles, ['manifest.json', '别名词典.md', '逐章记录.md'].sort())
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// 产物字数统计不再相信 manifest.files 的状态标签（B-06 的连带修复）。
+// 那个标签在 prepare 时写死、之后没人更新，按它过滤会让「填满的文件仍标 skeleton」
+// 被静默跳过，输出下界系统性偏低。这里用「把占位换成实内容」制造正是那种情形。
+test('产物字数按磁盘内容算，不按 manifest 状态算（填满后下界必须变大）', () => {
+  const dir = makeProduct()
+  try {
+    runScript([dir, '--record', '--stage', '4', '--in', '50000', '--out', '3000'])
+    const before = JSON.parse(runScript([dir, '--report', '--json']).stdout).下界.输出下界
+
+    // 把所有骨架文件的占位换成实内容，但刻意不动 manifest.files 的状态（模拟真实漂移）
+    const manifest = JSON.parse(readFileSync(join(dir, '工作', 'manifest.json'), 'utf8'))
+    let filled = 0
+    for (const rel of Object.keys(manifest.files)) {
+      if (rel.startsWith('原文/')) continue
+      const p = join(dir, rel)
+      let t
+      try { t = readFileSync(p, 'utf8') } catch { continue }
+      if (!t.includes('（待填）')) continue
+      writeFileSync(p, t.replace(/（待填）/g, '这里是填好的真实内容，约二十字左右的说明文字。'), 'utf8')
+      filled += 1
+    }
+    assert.ok(filled > 5, `夹具应有多个骨架文件，实际填了 ${filled} 个`)
+
+    const after = JSON.parse(runScript([dir, '--report', '--json']).stdout).下界.输出下界
+    assert.ok(after > before, `填满后输出下界应变大：${before} → ${after}`)
+
+    // 同时确认 manifest 的状态确实没变——这正是「两套账」的样子
+    const after2 = JSON.parse(readFileSync(join(dir, '工作', 'manifest.json'), 'utf8'))
+    assert.equal(after2.files['故事底本/全书设定/世界观.md'], 'skeleton', '夹具前提：状态标签仍写着 skeleton')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

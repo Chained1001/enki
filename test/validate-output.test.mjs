@@ -201,6 +201,23 @@ async function makeFilledProduct() {
     ['01', '全书', '书名', '1-5', '5', '100/20', '相遇钩', '关系困局', '李四', '成长', '车站', '定格', '下一卷悬念', '三天', '无'],
   ]))
 
+  // 同步 manifest.files 的状态（B-06）：prepare 写下的是 skeleton，上面这一段已经把内容填好了。
+  // 不同步的话，W_STATE_DRIFT 会对每个文件报一条「状态未更新」——那是**正确**的告警（真实产物
+  // 填完后也确实需要更新状态），但这个夹具造的是「一份填好的合格产物」，不是「一份状态过期的产物」。
+  // 想测漂移本身的用例在 test/state-drift.test.mjs，那边刻意不同步。
+  {
+    const mp = join(out, '工作/manifest.json')
+    const m = JSON.parse(await readFile(mp, 'utf8'))
+    for (const rel of Object.keys(m.files)) {
+      if (rel.startsWith('原文/') || rel === '工作/manifest.json') continue
+      let text
+      try { text = await readFile(join(out, rel), 'utf8') } catch { continue }
+      const body = text.replace(/^>.*$/gm, '')
+      m.files[rel] = body.includes('（待填）') ? 'skeleton' : 'filled'
+    }
+    await writeFile(mp, `${JSON.stringify(m, null, 2)}\n`, 'utf8')
+  }
+
   return { dir, out }
 }
 
