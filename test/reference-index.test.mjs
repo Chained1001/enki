@@ -63,6 +63,41 @@ test('索引里列出的行范围确实指向该小节标题（抽查最大的�
   }
 })
 
+// M-12 回归：末节的「止」曾比真实末行多 1。
+// 根因是 split(/\r?\n/) 在文件末尾留一个空元素，末节没有「下一个小标题」可减一，
+// 于是按索引翻文件会多读一个空行。这条断言锁住「止不能越过真实末行」。
+test('切节：每节的止行不超过真实末行，且末节止行就是最后一个非空行', async () => {
+  for (const name of ['人物提炼策略.md', '设定提炼策略.md', '幕与节奏策略.md', '拆解总策略.md']) {
+    const text = await readFile(join(refDir, name), 'utf8')
+    const lines = text.split(/\r?\n/)
+    // 真实末行（1 基）= 最后一个非空行的行号
+    let last = lines.length
+    while (last > 0 && lines[last - 1].trim() === '') last -= 1
+    const secs = sliceSections(text)
+    assert.ok(secs.length > 0, `${name} 应有小节`)
+    for (const s of secs) {
+      assert.ok(s.止 <= last, `${name} 的节「${s.节}」止行 ${s.止} 越过了真实末行 ${last}`)
+      assert.ok(s.止 >= s.起, `${name} 的节「${s.节}」止行 ${s.止} 小于起行 ${s.起}`)
+    }
+    const final = secs.at(-1)
+    assert.equal(
+      final.止,
+      last,
+      `${name} 的末节「${final.节}」止行应为真实末行 ${last}，实际 ${final.止}（多/少算会使按索引读取越界）`,
+    )
+    // 行数口径也要与起止一致
+    for (const s of secs) assert.equal(s.行数, s.止 - s.起 + 1, `${name} 的节「${s.节}」行数与起止不符`)
+  }
+})
+
+test('切节：带尾部空行的文本不会被算进末节', () => {
+  const text = '## 一\n内容\n\n## 二\n内容二\n\n\n'
+  const secs = sliceSections(text)
+  assert.equal(secs.length, 2)
+  // 末节止行不能吃掉末尾的两个空行
+  assert.equal(secs[1].止, 5, '末节止行应为「内容二」所在行，不含尾部空行')
+})
+
 test('索引声明了「由脚本生成」，且不含按字节错算的旧数字', async () => {
   const text = await readFile(join(refDir, '索引.md'), 'utf8')
   assert.match(text, /由 `scripts\/reference-index\.mjs --write` 生成/)
