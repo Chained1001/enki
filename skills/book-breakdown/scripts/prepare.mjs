@@ -455,18 +455,52 @@ function planBatches(chapters, volumes) {
     // 若照常计入就会顶掉一个名额——龙族2 正文正好 20 章（单批上限 20），
     // 被前言挤成 [0-19] + [20-20]，凭空多出一批只装 1 章的工作量。
     // 判据与骨架/标题计数处保持一致（no===0 且 title==='前言'），不新造字段。
-    const list = chapters
+    const units = chapters
       .filter((c) => c.no >= v.startCh && c.no <= v.endCh)
       .filter((c) => !(c.no === 0 && c.title === '前言'))
-      .map((c) => c.no)
-    for (let i = 0; i < list.length; i += THRESHOLDS.单批章数上限) {
+    // 按字数切批（#7 实测）：原先只按章数每 20 章一刀，遇到章长悬殊的书会切出
+    // 极不均衡的批——龙族3 批4-1 是 20 章 42.1 万字、批4-2 只有 3 章 7.1 万字，
+    // 批间差 5.9 倍。单批的上下文成本由字数决定，所以要让每个切分点落在字数均衡处。
+    //
+    // 做法（批数守恒的最小改动）：批数仍完全由章数上限决定（每批 ≤20 章，PRD F-13/A-13），
+    // 于是批数与原来一模一样，不会多花会话。然后在这 k 个切分点里，按章数上限允许的
+    // 范围内，把每个切分点挪到「累计字数最接近理想等分点」的章号上。
+    // 每批仍严格 ≤20 章，且批数不变——这两条是硬约束，其余只是把刀口对准字数。
+    if (!units.length) continue
+    const list = units.map((c) => c.no)
+    const chars = units.map((c) => c.chars ?? 0)
+    const total = chars.reduce((s, n) => s + n, 0)
+    const k = Math.max(1, Math.ceil(list.length / THRESHOLDS.单批章数上限))
+    const cap = THRESHOLDS.单批章数上限
+
+    // 前缀和，便于 O(1) 取区间字数。
+    const pre = [0]
+    for (const n of chars) pre.push(pre.at(-1) + n)
+
+    // 逐批确定终点：从当前位置起，在 [最大可行, 章数上限] 之间挑一个终点，
+    // 使「本批累计字数最接近 total/k」。下界保证剩余章仍装得进剩余批数。
+    let i = 0
+    for (let b = 0; b < k && i < list.length; b++) {
+      const batchesLeft = k - b
+      const lo = Math.max(i + 1, list.length - (batchesLeft - 1) * cap)
+      const hi = Math.min(i + cap, list.length - (batchesLeft - 1))
+      const ideal = (total * (b + 1)) / k
+      let best = lo
+      let bestErr = Infinity
+      for (let e = lo; e <= hi; e++) {
+        const err = Math.abs(pre[e] - ideal)
+        if (err < bestErr) { bestErr = err; best = e }
+      }
+      if (best <= i) best = Math.min(i + 1, list.length)
       batches.push({
         volumeNo: v.no,
-        batch: batches.filter((b) => b.volumeNo === v.no).length + 1,
+        batch: batches.filter((x) => x.volumeNo === v.no).length + 1,
         startCh: list[i],
-        endCh: list[Math.min(i + THRESHOLDS.单批章数上限 - 1, list.length - 1)],
+        endCh: list[best - 1],
+        chars: pre[best] - pre[i],
         status: 'pending',
       })
+      i = best
     }
   }
   return batches

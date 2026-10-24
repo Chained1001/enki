@@ -1,6 +1,6 @@
 {
   "name": "enki",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "description": "小说拆书技能包：按章摘要与写作要素抽取",
   "license": "MIT",

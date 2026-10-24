@@ -620,7 +620,19 @@ test('前言不占批位：20 章正文＋前言应切 1 批，不能切成 [0-1
     const r2 = await prepare({ input: src2 })
     const m2 = JSON.parse(readFileSync(join(r2.outDir, '工作', 'manifest.json'), 'utf8'))
     assert.equal(m2.batches.length, 2, '正文 21 章应切 2 批')
-    assert.deepEqual(m2.batches.map((b) => [b.startCh, b.endCh]), [[1, 20], [21, 21]])
+    // #7：切分点按字数均衡选，不再固定满 20 章再甩一个 1 章的尾批。
+    // 旧行为是 [1-20]+[21-21]（尾批 1 章，字数差近 20 倍）。
+    for (const b of m2.batches) {
+      assert.ok(b.endCh - b.startCh + 1 <= 20, '单批不超过 20 章')
+      assert.ok(b.endCh - b.startCh + 1 >= 2, '不产生只有 1 章的尾批')
+    }
+    assert.equal(m2.batches[0].startCh, 1, '首章从 1 起')
+    assert.equal(m2.batches.at(-1).endCh, 21, '末章到 21 止')
+    assert.equal(
+      m2.batches[0].endCh + 1, m2.batches[1].startCh, '批间连续，不漏章不重章',
+    )
+    const [c0, c1] = m2.batches.map((b) => b.chars)
+    assert.ok(Math.max(c0, c1) / Math.min(c0, c1) < 2, `两批字数应均衡，实得 ${c0} / ${c1}`)
   })
 })
 
