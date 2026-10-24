@@ -634,19 +634,29 @@ export async function validateOutput({ root, mode = 'deliver' }) {
     // 因此这里不查「弧数＝幕数」（出版书不拆事件弧，那个等式没有意义），
     // 而查「全部幕纲份数＝原文单元数」，并且逐卷核幕纲确实挂在所属卷下。
     const units = (manifest.chapters ?? []).filter((c) => !(c.no === 0 && c.title === '前言')).length
+    // 逐卷先算一遍，缺哪一卷要能指出来——只说「总数不对」等于让人自己数。
+    const emptyVols = (manifest.volumes ?? []).filter((v) => {
+      const prefix = `故事底本/故事剧情/幕纲/卷${String(v.no).padStart(2, '0')}-`
+      return actFiles.filter((f) => f.startsWith(prefix)).length === 0
+    })
+    // 缺口信息只报一次：总数对不上时并进 E_ACTS 的消息里，不另开一条。
+    // 两条消息说同一件事（实测全删时 E_ACTS 与逐卷各报一遍）会让报告更难读，也没多一个信息。
+    const where = emptyVols.length && emptyVols.length < (manifest.volumes ?? []).length
+      ? `；其中${emptyVols.map((v) => `卷${v.no}（${v.name}）`).join('、')}一份都没有`
+      : ''
     if (actFiles.length !== units) {
-      fail('E_ACTS', '故事底本/故事剧情/幕纲/', `出版书幕纲 ${actFiles.length} 份，应为 ${units} 份（＝原文单元数）`)
+      fail('E_ACTS', '故事底本/故事剧情/幕纲/', `出版书幕纲 ${actFiles.length} 份，应为 ${units} 份（＝原文单元数）${where}`)
     }
-    // 每卷都要有卷纲，且该卷的原文单元至少产出一份幕纲。
     for (const v of manifest.volumes ?? []) {
       const volRel = `故事底本/故事剧情/卷纲/卷${String(v.no).padStart(2, '0')}-`
       const volFile = actual.find((f) => f.rel.startsWith(volRel))
-      const prefix = `故事底本/故事剧情/幕纲/卷${String(v.no).padStart(2, '0')}-`
-      const n = actFiles.filter((f) => f.startsWith(prefix)).length
       if (!volFile) {
         pending('E_VOLUME_MISSING', 'W_VOLUME_MISSING', '故事底本/故事剧情/卷纲/', `出版书卷${v.no}（${v.name}）没有卷纲文件`)
+        continue
       }
-      if (n === 0) {
+      // 总数对得上却有卷为空（另一卷多出来），这时 E_ACTS 不响，得逐卷报。
+      if (actFiles.length === units && emptyVols.some((e) => e.no === v.no)) {
+        const prefix = `故事底本/故事剧情/幕纲/卷${String(v.no).padStart(2, '0')}-`
         pending('E_VOLUME_MISSING', 'W_VOLUME_MISSING', prefix, `出版书卷${v.no}（${v.name}）没有幕纲文件（应按原文单元逐份生成）`)
       }
     }
