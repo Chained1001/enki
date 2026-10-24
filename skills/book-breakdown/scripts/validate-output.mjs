@@ -498,6 +498,137 @@ export async function validateOutput({ root, mode = 'deliver' }) {
         }
       }
     }
+    // 结构对账（T2）：三处写着同一件事，写岔了没人拦。逐项都只查「能对上」的部分，
+    // 对不上的地方一律报出三处各自的值，让人能直接看出是哪一处写错了。
+    {
+      // ① 同一弧名在卷纲与幕纲里的起止章必须相等。
+      //    卷纲「事件弧清单」有「弧名」「起止章」两列；幕纲文件名带弧名、正文有「起止章：」行。
+      const normSpan = (s) => {
+        const m = /(\d+)\s*[-–—~至]\s*(\d+)/.exec(String(s ?? ''))
+        return m ? `${Number(m[1])}-${Number(m[2])}` : null
+      }
+      // 幕纲：按文件名里的弧名归到（卷, 弧名）→ {rel, span}
+      const actSpans = new Map()
+      for (const actRel of actFiles) {
+        const name = actRel.split('/').pop().replace(/\.md$/, '')
+        const volNo = /^卷(\d+)-/.exec(name)?.[1]
+        const arcName = /^卷\d+-幕\d+-(.+)$/.exec(name)?.[1]
+        if (!volNo || !arcName) continue
+        const actText = texts.get(actRel) ?? await readFile(join(root, actRel), 'utf8')
+        const span = normSpan(/起止章[：:]\s*([^\n]*)/.exec(actText)?.[1])
+        if (!span) continue
+        actSpans.set(`${Number(volNo)}|${arcName}`, { rel: actRel, span })
+      }
+      for (const v of manifest.volumes ?? []) {
+        const volRel = `故事底本/故事剧情/卷纲/卷${String(v.no).padStart(2, '0')}-`
+        const volFile = actual.find((f) => f.rel.startsWith(volRel))
+        if (!volFile) continue
+        const volText = texts.get(volFile.rel) ?? await readFile(volFile.full, 'utf8')
+        const table = arcTable(volText)
+        if (!table) continue
+        const iName = table.header.indexOf('弧名')
+        const iSpan = table.header.indexOf('起止章')
+        if (iName === -1 || iSpan === -1) continue
+        for (const r of table.rows) {
+          const arcName = String(r[iName] ?? '').trim()
+          const volSpan = normSpan(r[iSpan])
+          if (!arcName || !volSpan) continue
+          const act = actSpans.get(`${v.no}|${arcName}`)
+          if (!act) continue
+          if (act.span !== volSpan) {
+            fail('E_ARC_SPAN', volFile.rel, `弧「${arcName}」起止章在卷纲写 ${volSpan}，在幕纲（${act.rel.split('/').pop()}）写 ${act.span}，两处应相等`)
+          }
+        }
+      }
+
+      // ② 伏笔编号引用不得悬空。台账「编号」列是唯一权威，别处的 F\d-\d{2} 必须能在台账里找到。
+      const ledgerRel = actual.find((f) => f.rel.endsWith('伏笔台账.md'))?.rel
+      if (ledgerRel) {
+        const ledgerText = texts.get(ledgerRel) ?? await readFile(join(root, ledgerRel), 'utf8')
+        const known = new Set()
+        for (const line of ledgerText.split(/\r?\n/)) {
+          const cells = parseRow(line)
+          if (!cells) continue
+          const m = /\b(F\d{1,2}-\d{2})\b/.exec(cells[0] ?? '')
+          if (m) known.add(m[1])
+        }
+        // 只有台账里确实登记过编号时才检查，否则整本书的引用都会被判悬空（台账还没开始记）
+        if (known.size) {
+          for (const { rel, full } of actual) {
+            if (!rel.startsWith('故事底本/') || !rel.endsWith('.md')) continue
+            if (rel === ledgerRel) continue
+            const text = texts.get(rel) ?? await readFile(full, 'utf8')
+            const dangling = new Set()
+            for (const m of text.matchAll(/\b(F\d{1,2}-\d{2})\b/g)) {
+              if (!known.has(m[1])) dangling.add(m[1])
+            }
+            if (dangling.size) {
+              fail('E_FORESHADOW_REF', rel, `引用了伏笔台账里不存在的编号：${[...dangling].join('、')}（台账共登记 ${known.size} 条）`)
+            }
+          }
+        }
+      }
+
+      // ③ 人物卡「首次出场章」与别名词典同主名的「首次出现章」必须一致，且卡主名须在词典主名列里。
+      // 注意：上面的 texts 只装了契约计划内的文件与卷纲/幕纲，别名词典与人物卡都不在其中，
+      // 所以这里一律从 full 读，不能走 texts——走了会静默跳过，检查等于不存在（开发中踩过一次）。
+      const dictFile = actual.find((f) => f.rel.endsWith('别名词典.md'))
+      const cardFiles = actual.filter((f) => /人物\/(主角|主要配角|次要角色)\//.test(f.rel) && f.rel.endsWith('.md'))
+      if (dictFile && cardFiles.length) {
+        const dictText = await readFile(dictFile.full, 'utf8')
+        const dictFirst = new Map() // 主名 → 首个「首次出现章」数字
+        const colIdx = { main: 0, first: -1 }
+        for (const line of dictText.split(/\r?\n/)) {
+          const cells = parseRow(line)
+          if (!cells) continue
+          if (colIdx.first === -1) {
+            const f = cells.indexOf('首次出现章')
+            if (f !== -1) { colIdx.first = f; colIdx.main = cells.findIndex((c) => c === '主名') === -1 ? 0 : cells.findIndex((c) => c === '主名'); continue }
+          }
+          const main = String(cells[colIdx.main] ?? '').trim()
+          if (!main || /^-+$/.test(main) || main === '主名') continue
+          if (dictFirst.has(main)) continue
+          const first = Number((/\d+/.exec(String(cells[colIdx.first] ?? '')) ?? [])[0] ?? NaN)
+          if (Number.isFinite(first)) dictFirst.set(main, first)
+        }
+        if (dictFirst.size) {
+          for (const { rel, full } of cardFiles) {
+            const text = await readFile(full, 'utf8')
+            // 逐行找，不用带 ^ 的多行正则：^ 在没有 m 标志时只匹配全文开头，
+            // 而卡片第一行是「# 标题」，于是永远匹配不上（开发中踩过一次，闸门静默失效）。
+            const fieldOf = (label) => {
+              const line = text.split(/\r?\n/).find((l) => l.trim().startsWith(`- ${label}`))
+              return line ? line.replace(/^[^：:]*[：:]\s*/, '').trim() : null
+            }
+            const main = fieldOf('姓名（主名）')
+            if (!main || main === '（待填）') continue
+            if (!dictFirst.has(main)) {
+              warn('W_FIRST_SEEN', rel, `卡片主名「${main}」不在别名词典主名列中，首现章无法对账`)
+              continue
+            }
+            const cardFirst = Number((/\d+/.exec(fieldOf('首次出场章') ?? '') ?? [])[0] ?? NaN)
+            if (Number.isFinite(cardFirst) && cardFirst !== dictFirst.get(main)) {
+              warn('W_FIRST_SEEN', rel, `「${main}」首次出场章卡片写 ${cardFirst}，别名词典写 ${dictFirst.get(main)}，应对齐`)
+            }
+          }
+        }
+      }
+
+      // ④ 对应层产物已存在，文件里却仍标「未拆／待 0X」——状态没跟上。
+      const volFiles = actual.filter((f) => /^故事底本\/故事剧情\/卷纲\//.test(f.rel))
+      const STALE_VOL = /第\s*0?\d+\s*卷.{0,6}(未拆|待拆|尚未)|卷纲.{0,4}(未拆|待拆)/
+      if (volFiles.length > 0) {
+        for (const { rel, full } of actual) {
+          if (!rel.startsWith('故事底本/全书设定/') && !rel.endsWith('全书大纲.md')) continue
+          if (!rel.endsWith('.md')) continue
+          const text = texts.get(rel) ?? await readFile(full, 'utf8')
+          const m = STALE_VOL.exec(text)
+          if (m) {
+            warn('W_STALE_MARK', rel, `文件里仍标着「${m[0].slice(0, 24)}」，但卷纲已有 ${volFiles.length} 份，状态说明未更新`)
+          }
+        }
+      }
+    }
   } else {
     const units = (manifest.chapters ?? []).filter((c) => !(c.no === 0 && c.title === '前言')).length
     if (actFiles.length !== units) {
