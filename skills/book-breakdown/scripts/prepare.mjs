@@ -3,8 +3,9 @@
 // 六类噪音剥离、作者的话归集、三级分卷检测、出版书判定、建目录树、骨架落位、定量指纹、manifest 状态块。
 // 段名、列名、阈值、目录契约唯一来源是 contract.mjs（技术文档 D-01）。
 // 评审 P25：prepare() 拆为导出的 analyze()（纯计算，可读文件不落盘）＋persist()（落盘），对外签名与返回不变。
-// 用法：prepare.mjs <原文 txt> [--out <产物目录>] [--force] [--dry-run] [--json] [--help]
-// 退出码：0 成功，1 业务失败，2 参数错误。写文件：先写临时文件再重命名；已存在的产物目录默认续跑，--force 归档后重建（D-18）。
+// 用法：prepare.mjs <原文 txt> [--out <产物目录>] [--force --i-know] [--dry-run] [--json] [--help]
+// 退出码：0 成功，1 业务失败，2 参数错误。写文件：先写临时文件再重命名；已存在的产物目录默认续跑，--force --i-know 归档后重建（D-18）。
+// --force 单用会报参数错并列出「会丢多少个已填文件」与归档路径（B-07）：归档不是删除，但人要重做一遍。
 import { existsSync, statSync, renameSync } from 'node:fs'
 import { copyFile, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
@@ -16,7 +17,7 @@ import {
   mdSkeleton, outlineSkeleton, productPlan, styleSkeleton, tableColumns, tableSkeleton, topicSkeleton,
 } from './contract.mjs'
 
-const USAGE = '用法：prepare.mjs <原文 txt> [--out <产物目录>] [--force] [--dry-run] [--json] [--help]'
+const USAGE = '用法：prepare.mjs <原文 txt> [--out <产物目录>] [--force --i-know] [--dry-run] [--json] [--help]'
 
 // ---------- 中文数字 ----------
 
@@ -648,6 +649,32 @@ async function decodeInput(buffer, src) {
   }
 }
 
+// 量一遍「重建会丢掉多少活」（B-07）：--force 会归档整个产物目录并重建，
+// 归档不等于删除，但人要接着在新目录里重做——真正丢的是已填的内容与已花的会话。
+// 判据直接复用 progress.mjs 的 detectFileState（含「空表格算骨架」）：
+// 自己再写一遍必然走样，实测漏了空表格就会把十几个空索引数成「已填」。
+export async function countFilledArtifacts(outDir) {
+  const { detectFileState } = await import('./progress.mjs')
+  const filled = []
+  const walk = async (dir, prefix) => {
+    let entries
+    try { entries = await readdir(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      const rel = prefix ? `${prefix}/${e.name}` : e.name
+      if (e.isDirectory()) {
+        if (rel === '原文') continue // 原文是复制的，重建会重新生成，不算「活」
+        await walk(join(dir, e.name), rel)
+      } else if (e.name.endsWith('.md')) {
+        let text
+        try { text = await readFile(join(dir, e.name), 'utf8') } catch { continue }
+        if (detectFileState(text, rel) === 'filled') filled.push(rel)
+      }
+    }
+  }
+  await walk(outDir, '')
+  return filled
+}
+
 async function archiveOld(outDir) {
   const parent = dirname(outDir)
   const base = basename(outDir)
@@ -748,16 +775,34 @@ export async function analyze({ input, out }) {
 }
 
 // 落盘段（评审 P25 拆分）：校验产物目录、--force 归档、续跑对账、写章节/骨架/manifest。
-export async function persist(analysis, { force = false, dryRun = false } = {}) {
+export async function persist(analysis, { force = false, iKnow = false, dryRun = false } = {}) {
   const { src, outDir, book, bookType, encoding, appendix, chapters, volumes, batches, plan, files, manifest } = analysis
 
   // 产物目录已存在：--force 归档重建；否则有 manifest 走续跑对账，无 manifest 拒绝。
   let archived = null
   if (existsSync(outDir)) {
     if (force) {
+      // 二次确认（B-07）：--force 一句话就把整份产物归档重建，此前没有任何阻力。
+      // 归档不是删除，但人要接着在新目录里把内容重做一遍——真正丢的是已填的内容。
+      // 先把「会丢多少」数出来给他看，加 --i-know 才算确认过。
+      if (!iKnow) {
+        const filled = await countFilledArtifacts(outDir)
+        const parent = dirname(outDir)
+        const base = basename(outDir)
+        const entries = new Set(existsSync(parent) ? await readdir(parent) : [])
+        let k = 1
+        while (entries.has(`${base}_旧${k}`)) k += 1
+        const willArchiveTo = join(parent, `${base}_旧${k}`)
+        throw new UsageError(
+          `--force 会归档整个产物目录后重建，${filled.length} 个已填文件需要重做：`
+          + `${filled.slice(0, 5).join('、')}${filled.length > 5 ? ` 等 ${filled.length} 个` : ''}。`
+          + `归档到：${willArchiveTo}。确认要重建请加 --i-know`,
+          'E_FORCE_CONFIRM',
+        )
+      }
       archived = await archiveOld(outDir)
     } else if (!existsSync(join(outDir, '工作', 'manifest.json'))) {
-      throw new UsageError(`产物目录已存在且无 manifest：${outDir}。请换 --out，或用 --force 归档后重建`, 'E_EXISTS')
+      throw new UsageError(`产物目录已存在且无 manifest：${outDir}。请换 --out，或用 --force --i-know 归档后重建`, 'E_EXISTS')
     }
   }
   const resume = !force && archived === null && existsSync(join(outDir, '工作', 'manifest.json'))
@@ -826,7 +871,7 @@ export async function prepare(opts) {
 }
 
 export function parseArgs(argv) {
-  const options = { input: undefined, out: undefined, force: false, dryRun: false, json: false, help: false }
+  const options = { input: undefined, out: undefined, force: false, iKnow: false, dryRun: false, json: false, help: false }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--out') {
@@ -834,12 +879,17 @@ export function parseArgs(argv) {
       if (!v || v.startsWith('--')) throw new UsageError(`--out 缺少取值。${USAGE}`, 'E_ARGS')
       options.out = v
     } else if (arg === '--force') options.force = true
+    else if (arg === '--i-know') options.iKnow = true
     else if (arg === '--dry-run') options.dryRun = true
     else if (arg === '--json') options.json = true
     else if (arg === '--help' || arg === '-h') options.help = true
     else if (arg.startsWith('--')) throw new UsageError(`未知参数 ${arg}。${USAGE}`, 'E_ARGS')
     else if (options.input === undefined) options.input = arg
     else throw new UsageError(`多余的参数 ${arg}。${USAGE}`, 'E_ARGS')
+  }
+  // --i-know 单用没有意义：它是给 --force 的确认，不是独立动作。
+  if (options.iKnow && !options.force) {
+    throw new UsageError('--i-know 只能与 --force 同用（它是重建的二次确认，不是独立动作）', 'E_ARGS')
   }
   if (!options.help && !options.input) throw new UsageError(USAGE, 'E_ARGS')
   return options

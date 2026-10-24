@@ -316,7 +316,19 @@ test('重入：不覆盖已有文件，源变更被拒，--force 归档重建', 
     const changed = await writeSample(dir, '续跑书.txt', `${SAMPLE}\n\n第四章 新\n正文\n`)
     await assert.rejects(() => prepare({ input: changed }), /源文件已变更/)
 
-    const forced = await prepare({ input: changed, force: true })
+    // --force 需要 --i-know 才算确认（B-07）：单用会报错并写明会丢多少、归档到哪
+    await assert.rejects(
+      () => prepare({ input: changed, force: true }),
+      (e) => {
+        assert.equal(e.code, 'E_FORCE_CONFIRM')
+        assert.match(e.message, /已填文件需要重做/, '消息要说清会丢多少')
+        assert.match(e.message, /归档到：/, '消息要给归档路径')
+        assert.match(e.message, /--i-know/, '消息要给出确认方式')
+        return true
+      },
+    )
+
+    const forced = await prepare({ input: changed, force: true, iKnow: true })
     assert.ok(forced.archived && forced.archived.includes('_旧1'), 'force 应归档旧目录')
     assert.ok(existsSync(forced.archived), '归档目录应存在')
     assert.equal(forced.action, 'prepared')

@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url'
 import { ENUMS } from './contract.mjs'
 import { IoError, readManifest, writeFileAtomic } from './io.mjs'
 
-const USAGE = '用法：progress.mjs <产物目录> [--batch-done 卷号:批号]... [--stage 阶段号:状态]... [--json] [--help]'
+const USAGE = '用法：progress.mjs <产物目录> [--batch-done 卷号:批号]... [--stage 阶段号:状态]... [--file 相对路径:状态]... [--resync-files] [--json] [--help]'
 
 export class UsageError extends Error {
   constructor(message, code = 'E_PROGRESS') { super(message); this.code = code }
@@ -40,7 +40,39 @@ export function queryProgress(manifest) {
   }
 }
 
-export async function updateProgress({ root, batchDone = [], stage = [] }) {
+// 骨架态判据与 validate-output.mjs 保持一致：正文里还有没有「还没填」的证据。
+// 不一致会让「按内容判定」出现两套结果——一处说填好了，另一处说还是骨架。
+// 这里刻意不复用 validate-output 的内部函数：那是个校验器，progress 只是改状态，
+// 为了一个判据把整个校验器拖进来不划算；两处判据由测试对齐（test/progress-file.test.mjs）。
+function firstTable(text) {
+  const lines = text.split(/\r?\n/)
+  let header = null
+  const rows = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]?.trim() ?? ''
+    if (!line.startsWith('|') || !line.endsWith('|')) continue
+    const cells = line.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim())
+    if (cells.length < 2) continue
+    if (cells.every((c) => /^[-: ]*$/.test(c))) continue // 分隔行
+    if (header === null) { header = cells; continue }
+    rows.push(cells)
+  }
+  return header ? { header, rows } : null
+}
+
+// 由文件内容判定状态：filled 或 skeleton。纯表格产物（索引/台账/词典）没有「（待填）」字样，
+// 只按占位判会把空表当成已填，所以再看「表头齐了但零数据行」。
+export function detectFileState(text, rel = '') {
+  const body = text.replace(/^>.*$/gm, '')
+  if (body.includes('（待填）')) return 'skeleton'
+  if (rel.endsWith('.md')) {
+    const table = firstTable(body)
+    if (table && !/^## /m.test(body) && table.rows.length === 0) return 'skeleton'
+  }
+  return 'filled'
+}
+
+export async function updateProgress({ root, batchDone = [], stage = [], file = [] }) {
   root = resolve(root)
   const manifestPath = join(root, '工作', 'manifest.json')
   if (!existsSync(manifestPath)) throw new UsageError('产物目录缺少 manifest，请先运行 prepare', 'E_MANIFEST')
@@ -48,6 +80,7 @@ export async function updateProgress({ root, batchDone = [], stage = [] }) {
   const mtimeMs = statSync(manifestPath).mtimeMs // 评审 P7：记录读取时刻的 mtime，写盘前复核
   manifest.batches ??= []
   manifest.stages ??= []
+  manifest.files ??= {}
 
   for (const key of batchDone) {
     const m = /^(\d+):(\d+)$/.exec(key)
@@ -64,8 +97,26 @@ export async function updateProgress({ root, batchDone = [], stage = [] }) {
     if (!ENUMS.阶段状态.includes(m[2])) throw new UsageError(`状态「${m[2]}」不在枚举内：${ENUMS.阶段状态.join('、')}`, 'E_STAGE')
     item.status = m[2]
   }
+  // 文件状态写入（B-06）：此前 manifest.files 只在 prepare 时写一次，之后没有任何写入口，
+  // 于是它必然过期。这里给一个稳定的入口，路径须是产物根相对路径，且文件必须真实存在——
+  // 允许给不存在的文件记状态，等于又造一套「说与做不一致」的账。
+  for (const key of file) {
+    const sep = key.lastIndexOf(':')
+    if (sep <= 0) throw new UsageError(`--file 取值「${key}」应为 相对路径:状态，如 故事底本/文风.md:filled`, 'E_ARGS')
+    const rel = key.slice(0, sep).replace(/\\/g, '/')
+    const want = key.slice(sep + 1)
+    if (!ENUMS.文件状态.includes(want)) {
+      throw new UsageError(`文件状态「${want}」不在枚举内：${ENUMS.文件状态.join('、')}`, 'E_ARGS')
+    }
+    if (rel.startsWith('/') || rel.includes('..')) {
+      throw new UsageError(`--file 的路径必须是产物根下的相对路径，不接受「${rel}」`, 'E_ARGS')
+    }
+    const full = join(root, rel)
+    if (!existsSync(full)) throw new UsageError(`文件不存在：${rel}`, 'E_FILE')
+    manifest.files[rel] = want
+  }
 
-  const changed = batchDone.length + stage.length > 0
+  const changed = batchDone.length + stage.length + file.length > 0
   if (changed) {
     assertManifestUnchanged(manifestPath, mtimeMs) // 评审 P7：并发写/外部手改 → E_CONFLICT，不覆盖
     await writeFileAtomic(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
@@ -73,8 +124,37 @@ export async function updateProgress({ root, batchDone = [], stage = [] }) {
   return { changed, progress: queryProgress(manifest) }
 }
 
+// 续跑时按内容重判全部文件状态（B-06）：照抄上次记录的标签没有意义——
+// 那份标签正是会过期的东西。只重判已登记的文件；新文件由 prepare/流程自己登记。
+export async function resyncFileStates({ root }) {
+  root = resolve(root)
+  const manifestPath = join(root, '工作', 'manifest.json')
+  if (!existsSync(manifestPath)) throw new UsageError('产物目录缺少 manifest，请先运行 prepare', 'E_MANIFEST')
+  const manifest = await readManifest(root)
+  const mtimeMs = statSync(manifestPath).mtimeMs
+  manifest.files ??= {}
+  let changed = 0
+  for (const rel of Object.keys(manifest.files)) {
+    if (rel.startsWith('原文/') || rel === '工作/manifest.json') continue
+    const full = join(root, rel)
+    if (!existsSync(full)) continue
+    const want = detectFileState(await readFile(full, 'utf8'), rel)
+    // 已经人工标成 validated/failed 的不覆盖：那是流程的判断，不是内容能推出来的。
+    if (manifest.files[rel] === 'validated' || manifest.files[rel] === 'failed') continue
+    if (manifest.files[rel] !== want) {
+      manifest.files[rel] = want
+      changed += 1
+    }
+  }
+  if (changed) {
+    assertManifestUnchanged(manifestPath, mtimeMs)
+    await writeFileAtomic(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+  }
+  return { changed, progress: queryProgress(manifest) }
+}
+
 export function parseArgs(argv) {
-  const options = { root: undefined, batchDone: [], stage: [], json: false, help: false }
+  const options = { root: undefined, batchDone: [], stage: [], file: [], resync: false, json: false, help: false }
   let i = 0
   const valueOf = (flag) => {
     const v = argv[++i]
@@ -85,6 +165,8 @@ export function parseArgs(argv) {
     const arg = argv[i]
     if (arg === '--batch-done') options.batchDone.push(valueOf('--batch-done'))
     else if (arg === '--stage') options.stage.push(valueOf('--stage'))
+    else if (arg === '--file') options.file.push(valueOf('--file'))
+    else if (arg === '--resync-files') options.resync = true
     else if (arg === '--json') options.json = true
     else if (arg === '--help' || arg === '-h') options.help = true
     else if (arg.startsWith('--')) throw new UsageError(`未知参数 ${arg}。${USAGE}`, 'E_ARGS')
@@ -113,7 +195,9 @@ async function main() {
     return
   }
   try {
-    const { changed, progress } = await updateProgress(options)
+    const { changed, progress } = options.resync
+      ? await resyncFileStates(options)
+      : await updateProgress(options)
     if (options.json) {
       console.log(JSON.stringify({ ok: true, errors: [], data: { changed, ...progress } }, null, 2))
     } else {
