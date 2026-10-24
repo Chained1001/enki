@@ -18,20 +18,30 @@ const SRC_DIR = process.env.ENKI_REALBOOK_DIR
 
 // 八本实测书的基线。均章＝正文单元字数之和 / 正文单元数（不含前言），与 detectBookType 同口径。
 // 这批数字来自 2026-10-24 在真实原文上的结构检测，采集脚本见 AGENTS.md「验证」节。
+//
+// 2026-10-24 更新（#9）：章头正则原先把「第二回合，…」切成「第2回 / 合，…」，
+// 三本书各有一批假章头。修好后章数与卷数如下变化（都是修复带来的真变化，不是漂移）：
+//   我真没想重生啊  1078→1077 章、7→6 卷（「第一节快下课…」不再切章；末卷 6 章是真实后日谈）
+//   绍宋             438→437 章、7→6 卷（「第一回合，李经…」不再切章；**卷05 由 9 章恢复成 73 章**）
+//   十日终焉        1382→1360 章、5→1 卷（24 个假「第N回」不再切章，其 rawNo=1 造成的
+//                   5 个假卷界一并消失——原文 rawNo 从 1 连续到 1358，本就没有卷，
+//                   所以 1 卷是正确结果，不是丢失）
+//   龙族1            11→12 章（**「序 章 白帝城」中间是半角空格，原先因 `\s` 在模板字符串里
+//                   退化成字面量 s 而识别失败，整篇序章被并进前言**；现在正确识别为独立章）
 const BASELINE = [
   { file: '《长安的荔枝》.txt', bookType: '网文', chapterCount: 7, volumeCount: 1, avg: 14386 },
   { file: '《大奉打更人》.txt', bookType: '网文', chapterCount: 916, volumeCount: 5, avg: 4102 },
-  { file: '《我真没想重生啊》.txt', bookType: '网文', chapterCount: 1078, volumeCount: 7, avg: 2839 },
-  { file: '《绍宋》.txt', bookType: '网文', chapterCount: 438, volumeCount: 7, avg: 6340 },
+  { file: '《我真没想重生啊》.txt', bookType: '网文', chapterCount: 1077, volumeCount: 6, avg: 2842 },
+  { file: '《绍宋》.txt', bookType: '网文', chapterCount: 437, volumeCount: 6, avg: 6354 },
   { file: '《道诡异仙》.txt', bookType: '网文', chapterCount: 1028, volumeCount: 3, avg: 2173 },
-  { file: '《龙族1·火之晨曦》.txt', bookType: '出版', chapterCount: 11, volumeCount: 1, avg: 26120 },
+  { file: '《龙族1·火之晨曦》.txt', bookType: '出版', chapterCount: 12, volumeCount: 1, avg: 23878 },
   { file: '《龙族2·悼亡者之瞳》.txt', bookType: '出版', chapterCount: 21, volumeCount: 1, avg: 19603 },
   { file: '《龙族3·黑月之潮》.txt', bookType: '出版', chapterCount: 58, volumeCount: 4, avg: 19858 },
 ]
 
 // 同类旁证（不在 #6 的八本之列，但同样守着两类的边界）。
 const EXTRA = [
-  { file: '《十日终焉》.txt', bookType: '网文', chapterCount: 1382, volumeCount: 5, avg: 2106 },
+  { file: '《十日终焉》.txt', bookType: '网文', chapterCount: 1360, volumeCount: 1, avg: 2141 },
   { file: '《诡秘之主》.txt', bookType: '网文', chapterCount: 1394, volumeCount: 8, avg: 3141 },
 ]
 
