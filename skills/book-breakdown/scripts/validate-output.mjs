@@ -10,7 +10,7 @@ import { join, relative, resolve, sep } from 'node:path'
 import { IoError, readManifest } from './io.mjs'
 import { pathToFileURL } from 'node:url'
 import {
-  COLLECTIONS, ENUMS, QUOTE_PATTERN, QUOTE_RULE, SECTIONS, SOURCE_META_LABELS, SOURCE_PATTERN, THRESHOLDS,
+  COLLECTIONS, CONTRACT_VERSION, ENUMS, QUOTE_PATTERN, QUOTE_RULE, SECTIONS, SOURCE_META_LABELS, SOURCE_PATTERN, THRESHOLDS,
   VARIABLE_FILE_RULES, productPlan, tableColumns,
 } from './contract.mjs'
 
@@ -121,6 +121,17 @@ export async function validateOutput({ root, mode = 'deliver' }) {
   }
   const bookType = manifest.bookType ?? '网文'
   const plan = productPlan({ bookType })
+
+  // 契约版本（T14）：产物记录它按哪版契约写成。
+  // 只报提示、不改判定——旧产物的错误大多数是真错误（缺卡片字段、旧表头），
+  // 把它们「按契约变更剔除」等于把真问题一并藏起来。这里给出线索，判定仍按当前契约。
+  const contractVersionNote = (() => {
+    const got = manifest.contractVersion
+    if (got === CONTRACT_VERSION) return null
+    if (!got) return `产物未记录契约版本（旧版 prepare 生成），按当前 ${CONTRACT_VERSION} 校验；报出的错误可能是契约变更所致，也可能是真缺陷，需逐条判断`
+    return `产物按契约 ${got} 写成，校验器为 ${CONTRACT_VERSION}；差异需逐条判断是契约变更还是真缺陷`
+  })()
+  if (contractVersionNote) warn('W_CONTRACT_VERSION', '工作/manifest.json', contractVersionNote)
 
   const actual = (await walkFiles(root)).filter((f) => !f.rel.endsWith('.tmp'))
   const rels = new Set(actual.map((f) => f.rel))

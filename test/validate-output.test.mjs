@@ -700,3 +700,38 @@ test('T9：主角五文件不走卡片字段校验（人物卡模板明写「主
     assert.deepEqual(hits, [], '主角五文件各有自己的段名契约，不该套人物卡字段模板')
   })
 })
+
+test('T14：产物契约版本与校验器不一致时给提示，但不改判定', async () => {
+  await withFilled(async (out) => {
+    const mf = join(out, '工作', 'manifest.json')
+    const original = await readFile(mf, 'utf8')
+    const { CONTRACT_VERSION } = await import('../skills/book-breakdown/scripts/contract.mjs')
+
+    // ① 新版产物：版本一致，不报
+    const cur = await validateOutput({ root: out })
+    assert.ok(!cur.errors.some((e) => e.code === 'W_CONTRACT_VERSION'), '版本一致时不该报')
+
+    // ② 旧版产物（无该字段）：报一条警告
+    const old = JSON.parse(original)
+    delete old.contractVersion
+    await writeFile(mf, `${JSON.stringify(old, null, 2)}\n`, 'utf8')
+    const r2 = await validateOutput({ root: out })
+    const hits = r2.errors.filter((e) => e.code === 'W_CONTRACT_VERSION')
+    assert.equal(hits.length, 1, '旧版产物须提示契约版本缺失')
+    assert.equal(hits[0].severity, 'warning', '这是提示不是错误：旧产物的报错大多是真实缺陷')
+    assert.match(hits[0].message, /未记录契约版本/)
+
+    // ③ 更高版本：报提示
+    const future = JSON.parse(original)
+    future.contractVersion = '9.9.9'
+    await writeFile(mf, `${JSON.stringify(future, null, 2)}\n`, 'utf8')
+    const r3 = await validateOutput({ root: out })
+    assert.ok(r3.errors.some((e) => e.code === 'W_CONTRACT_VERSION' && /9\.9\.9/.test(e.message)))
+
+    // 恢复
+    await writeFile(mf, original, 'utf8')
+    const back = await validateOutput({ root: out })
+    assert.ok(!back.errors.some((e) => e.code === 'W_CONTRACT_VERSION'))
+    assert.ok(CONTRACT_VERSION)
+  })
+})
