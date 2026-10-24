@@ -23,6 +23,25 @@ import { parseRow } from './validate-output.mjs'
 
 const PLACEHOLDER = '（待填）'
 
+// 空值记号：这些值不是实体，是「本格没有内容」的占位写法。
+// 龙族3 实测：章 0 是题记，视角写「（无人称叙述）」、地点写「无」，
+// 二者都被当成实体进了索引（多出两个只出现 1 章的假实体），
+// 与龙族2 那次「（提及）」后缀造假实体是同一类问题。
+// 判据：全角/半角括号包裹的说明性短语，或单字「无」——它们不可能是人物/地点名。
+const EMPTY_MARKS = new Set([
+  PLACEHOLDER, '无', '（无）', '(无)', '（无人称叙述）', '(无人称叙述)',
+  '（未出场）', '（提及）', '—', '——', '-',
+])
+
+export function isEmptyMark(s) {
+  const t = String(s ?? '').trim()
+  if (!t) return true
+  if (EMPTY_MARKS.has(t)) return true
+  // 形如「（…叙述）」「（全知视角）」这类纯说明：整格被一对括号包住且不含分隔符
+  if (/^[（(][^（()）]{1,12}[）)]$/.test(t) && !/[、，,／/；;]/.test(t)) return true
+  return false
+}
+
 // 把一格「出场人物」拆成实体名。分隔符：顿号、逗号、斜杠、分号。
 // 「多视角（甲／乙）」这类写法先去壳再拆，避免把「多视角」当人名。
 //
@@ -34,6 +53,7 @@ export function splitEntities(cell) {
   if (!cell) return []
   let s = String(cell).trim()
   if (!s || s === PLACEHOLDER) return []
+  if (isEmptyMark(s)) return []
   // 去「多视角（…）」外壳，保留括号里的名字
   const wrapped = /^多视角[（(](.+)[）)]$/.exec(s)
   if (wrapped) s = wrapped[1]

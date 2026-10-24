@@ -150,6 +150,22 @@ test('entity-index：拆分出场人物，去「多视角」外壳', () => {
   assert.deepEqual(splitEntities(''), [])
 })
 
+test('entity-index：空值记号不进索引（龙族3 实测）', () => {
+  // 龙族3 章 0 是题记：视角写「（无人称叙述）」、地点写「无」。
+  // 旧实现只过滤「（待填）」，这两格被当成实体进索引——多出两个只出现 1 章的假实体
+  // （「（无人称叙述）」进了人物表、「无」进了地点表），与龙族2 的「（提及）」同类。
+  assert.deepEqual(splitEntities('无'), [], '单字「无」不是地点')
+  assert.deepEqual(splitEntities('（无）'), [])
+  assert.deepEqual(splitEntities('（无人称叙述）'), [], '括号说明不是人物')
+  assert.deepEqual(splitEntities('（提及）'), [])
+  assert.deepEqual(splitEntities('—'), [])
+  assert.deepEqual(splitEntities('（全知视角）'), [])
+  // 反例：带顿号的括号内容是真枚举，不能当说明吞掉
+  assert.deepEqual(splitEntities('（甲、乙）'), ['（甲、乙）'], '含分隔符的括号是真名字，整体保留')
+  // 反例：正常故事人物不受影响
+  assert.deepEqual(splitEntities('雷娜塔、零号'), ['雷娜塔', '零号'])
+})
+
 test('entity-index：括号内的分隔符不切分（真书实测的路线写法）', () => {
   // 《长安的荔枝》第 2 章地点写「长安至广州（灞桥、商州道、…、广州）」，
   // 是一条路线的括注。旧实现把括号内顿号也当分隔符，切出
