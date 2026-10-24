@@ -186,11 +186,11 @@ async function makeFilledProduct() {
   await writeRel('工作/逐章记录.md', tableFile('逐章记录', '逐章记录', [
     // 十二列：第 3 格「章字数」必须与 manifest.chapters[].chars 逐字一致（E_CHARCOUNT 严格校验），
     // 本夹具由 NOVEL 真实跑 prepare 生成，故此处取实测值 14/5/5/4/5。
-    ['1', '第一章 相遇', '14', '张三', '车站', '张三、李四', '相遇', '主线', '埋 F001', '扬', '悬念', '无'],
-    ['2', '第二章 同行', '5', '张三', '路上', '张三、李四', '同行', '主线', '', '扬', '期待', '小'],
-    ['3', '第三章 风波', '5', '张三', '路上', '张三、李四', '风波', '主线', '', '抑', '钝收', '无'],
-    ['4', '第四章 破局', '4', '张三', '路上', '张三、李四', '破局', '主线', '', '扬', '反差', '大'],
-    ['5', '第五章 归途', '5', '张三', '车站', '张三', '归途', '主线', '收 F001', '扬', '危机', '中'],
+    ['1', '第一章 相遇', '14', '张三', '车站', '张三、李四', '相遇', '主线', '埋 F001', '扬', '悬念', '无', ''],
+    ['2', '第二章 同行', '5', '张三', '路上', '张三、李四', '同行', '主线', '', '扬', '期待', '小', '逆袭'],
+    ['3', '第三章 风波', '5', '张三', '路上', '张三、李四', '风波', '主线', '', '抑', '钝收', '无', ''],
+    ['4', '第四章 破局', '4', '张三', '路上', '张三、李四', '破局', '主线', '', '扬', '反差', '大', '打脸'],
+    ['5', '第五章 归途', '5', '张三', '车站', '张三', '归途', '主线', '收 F001', '扬', '危机', '中', '情感'],
   ]))
   await writeRel('故事底本/故事剧情/伏笔台账.md', tableFile('伏笔台账', '伏笔台账', [
     // 十一列跟进（Q-23/Q-24 跟进）：类型/回收幕/重要度取合法枚举。
@@ -303,7 +303,7 @@ test('删段、改表头、删行、坏台账、多文件、缺文件、缺出�
     const recordRel = '工作/逐章记录.md'
     const record = await read(recordRel)
     // 十二列：删除目标行同步带「章字数」格，与 makeFilledProduct 的行保持逐字一致。
-    await write(recordRel, record.replace('| 5 | 第五章 归途 | 5 | 张三 | 车站 | 张三 | 归途 | 主线 | 收 F001 | 扬 | 危机 | 中 |\n', ''))
+    await write(recordRel, record.replace('| 5 | 第五章 归途 | 5 | 张三 | 车站 | 张三 | 归途 | 主线 | 收 F001 | 扬 | 危机 | 中 | 情感 |\n', ''))
     let r3 = await validateOutput({ root: out })
     assert.ok(r3.errors.some((e) => e.code === 'E_ROW_COUNT'), '应有 E_ROW_COUNT')
     await write(recordRel, record)
@@ -400,7 +400,7 @@ test('非产物目录报 E_MANIFEST', async () => {
 function lineRows(map, from = 1, to = 200) {
   const rows = []
   for (let no = from; no <= to; no++) {
-    rows.push([String(no), `第${no}章`, '1200', '主角', '某地', '主角', `事件${no}`, (map[no] ?? ['主线']).join('、'), '', '扬', '悬念', '无'])
+    rows.push([String(no), `第${no}章`, '1200', '主角', '某地', '主角', `事件${no}`, (map[no] ?? ['主线']).join('、'), '', '扬', '悬念', '无', '']) 
   }
   return rows
 }
@@ -433,17 +433,17 @@ test('W_LINE_GAP：人工缺席数据在交付与进度两模式都报警告（A
     const recordRel = '工作/逐章记录.md'
     // 注入缺席数据：支线·李四出现 3 次（第 1/2/3 章）后第 104 章才再现（章号差 101>100）；
     // 主线每行出现，其最大间隔 100 恰不超过阈值，不告警——对照出警告只打缺席线。
-    // 十一列跟进（Q-23/Q-24 跟进）：注入表同步补章末钩型/爽点标记两列（合法枚举）。
+    // 十三列跟进（Q-23/Q-24、A-09 跟进）：注入表同步补章末钩型/爽点强度/爽点类型三列（合法枚举）。
     // 十二列：再补「章字数」列（脚本填，此处填任意整数即可）。
     await writeFile(join(out, recordRel), [
       '# 逐章记录', '',
-      '| 全局章号 | 标题（清洗后） | 章字数 | 视角人物 | 地点 | 出场人物 | 一句话事件 | 剧情线 | 伏笔埋/收 | 情绪 | 章末钩型 | 爽点标记 |',
-      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
-      '| 1 | 第一章 相遇 | 14 | 张三 | 车站 | 张三、李四 | 相遇 | 主线、支线·李四 | 埋 F001 | 扬 | 悬念 | 无 |',
-      '| 2 | 第二章 同行 | 5 | 张三 | 路上 | 张三、李四 | 同行 | 主线、支线·李四 | | 扬 | 期待 | 小 |',
-      '| 3 | 第三章 风波 | 5 | 张三 | 路上 | 张三、李四 | 风波 | 主线、支线·李四 | | 抑 | 钝收 | 无 |',
-      '| 4 | 第四章 破局 | 4 | 张三 | 路上 | 张三、李四 | 破局 | 主线 | | 扬 | 反差 | 大 |',
-      '| 104 | 第五章 归途 | 5 | 张三 | 车站 | 张三 | 归途 | 主线、支线·李四 | 收 F001 | 扬 | 危机 | 中 |',
+      '| 全局章号 | 标题（清洗后） | 章字数 | 视角人物 | 地点 | 出场人物 | 一句话事件 | 剧情线 | 伏笔埋/收 | 情绪 | 章末钩型 | 爽点强度 | 爽点类型 |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| 1 | 第一章 相遇 | 14 | 张三 | 车站 | 张三、李四 | 相遇 | 主线、支线·李四 | 埋 F001 | 扬 | 悬念 | 无 |  |',
+      '| 2 | 第二章 同行 | 5 | 张三 | 路上 | 张三、李四 | 同行 | 主线、支线·李四 | | 扬 | 期待 | 小 | 逆袭 |',
+      '| 3 | 第三章 风波 | 5 | 张三 | 路上 | 张三、李四 | 风波 | 主线、支线·李四 | | 抑 | 钝收 | 无 |  |',
+      '| 4 | 第四章 破局 | 4 | 张三 | 路上 | 张三、李四 | 破局 | 主线 | | 扬 | 反差 | 大 | 打脸 |',
+      '| 104 | 第五章 归途 | 5 | 张三 | 车站 | 张三 | 归途 | 主线、支线·李四 | 收 F001 | 扬 | 危机 | 中 | 情感 |',
       '',
     ].join('\n'), 'utf8')
     for (const mode of ['deliver', 'progress']) {
@@ -836,6 +836,51 @@ test('T18：W_QUOTE_WEAK 不改交付判定（只警告）', async () => {
     assert.ok(r.errors.some((e) => e.code === 'W_QUOTE_WEAK'), '应有该警告')
     assert.equal(r.data.errors, 0, '警告不计入 errors，产物仍算通过')
     assert.ok(r.ok)
+    await writeFile(join(out, rel), orig, 'utf8')
+  })
+})
+
+test('W_NO_COST：金手指代价写「无」但没给章号时告警（B-06）', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/金手指.md'
+    const orig = await readFile(join(out, rel), 'utf8')
+    const next = orig.replace(/## 代价与限制\n\n[\s\S]*?(?=\n## |$)/, '## 代价与限制\n\n- 无\n')
+    assert.notEqual(next, orig, '夹具应含「代价与限制」段')
+    await writeFile(join(out, rel), next, 'utf8')
+    const r = await validateOutput({ root: out })
+    assert.ok(r.errors.some((e) => e.code === 'W_NO_COST'), `应有 W_NO_COST，实际：${r.errors.map((e) => e.code).join(',')}`)
+    assert.equal(r.data.errors, 0, '警告不计入 errors——真的无代价的书不该被拦下')
+    assert.ok(r.ok)
+    await writeFile(join(out, rel), orig, 'utf8')
+  })
+})
+
+test('W_NO_COST：写了「无」但附了依据章号时不告警（反向，防误报）', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/金手指.md'
+    const orig = await readFile(join(out, rel), 'utf8')
+    const next = orig.replace(
+      /## 代价与限制\n\n[\s\S]*?(?=\n## |$)/,
+      '## 代价与限制\n\n- 无代价（第 1 章明写「此物不索报偿」，主角只失去睡眠）\n',
+    )
+    await writeFile(join(out, rel), next, 'utf8')
+    const r = await validateOutput({ root: out })
+    assert.ok(!r.errors.some((e) => e.code === 'W_NO_COST'), '附了章号就不该告警')
+    await writeFile(join(out, rel), orig, 'utf8')
+  })
+})
+
+test('W_NO_COST：代价写了具体内容（非「无」）时不告警——这条只查「无」', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/金手指.md'
+    const orig = await readFile(join(out, rel), 'utf8')
+    const next = orig.replace(
+      /## 代价与限制\n\n[\s\S]*?(?=\n## |$)/,
+      '## 代价与限制\n\n- 每次使用折寿三年（第 2 章「三载之寿，一用即尽」）\n',
+    )
+    await writeFile(join(out, rel), next, 'utf8')
+    const r = await validateOutput({ root: out })
+    assert.ok(!r.errors.some((e) => e.code === 'W_NO_COST'), '写了具体代价就不该告警')
     await writeFile(join(out, rel), orig, 'utf8')
   })
 })

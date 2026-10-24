@@ -5,7 +5,7 @@
 // 实测约 4.7M tokens 全花在重复读表上（占总输入的 71%）。
 // 本脚本只改目标章号对应的行，agent 无需读表，也不存在「改错行」的可能。
 //
-// 只写 agent 负责的 9 列：视角人物/地点/出场人物/一句话事件/剧情线/伏笔埋收/情绪/章末钩型/爽点标记。
+// 只写 agent 负责的 10 列：视角人物/地点/出场人物/一句话事件/剧情线/伏笔埋收/情绪/章末钩型/爽点强度/爽点类型。
 // 全局章号、标题、章字数三列由 prepare 写好，本脚本不碰（改了会被 E_CHARCOUNT 判错）。
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -24,14 +24,16 @@ const FIELDS = [
   ['伏笔埋收', '伏笔埋/收'],
   ['情绪', '情绪'],
   ['章末钩型', '章末钩型'],
-  ['爽点标记', '爽点标记'],
+  ['爽点强度', '爽点强度'],
+  ['爽点类型', '爽点类型'],
 ]
 
 // 枚举约束：写在表里就让 agent 自己查，脚本再兜一层。
 const ENUM_FIELDS = [
   ['情绪', '情绪'],
   ['章末钩型', '钩型'],
-  ['爽点标记', '爽点标记'],
+  ['爽点强度', '爽点强度'],
+  ['爽点类型', '爽点类型'],
 ]
 
 const PLACEHOLDER = '（待填）'
@@ -88,6 +90,9 @@ export function applyRows(lines, entries, { partial = false, enums = ENUMS } = {
         // 前言/扉页这类非叙事行（prepare 记为第 0 章）没有情绪可言，模板明写「情绪可空」。
         // 原先 9 个字段一律必填，导致有前言的书第 0 章那一行照模板填一定报 E_FIELD。
         if (no === 0 && NON_NARRATIVE_OPTIONAL.includes(key)) continue
+        // 「爽点类型」的性质是条件必填：爽点强度为「无」时无类型可填。
+        // 若把它的缺失一律放行，等于给所有行开了个洞；只在这一种组合下放行。
+        if (key === '爽点类型' && String(e.爽点强度 ?? '').trim() === '无') continue
         if (partial) continue
         throw new RowError('E_FIELD', `第 ${no} 章缺字段「${key}」（要只补部分列请加 --partial）`)
       }
@@ -149,7 +154,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (!args.dir || !args.rows) {
     console.error('用法：node write-rows.mjs <产物目录> --rows <条目.json> [--partial] [--dry-run] [--json]')
-    console.error('条目格式：[{"章号":1,"视角人物":"…","地点":"…","出场人物":"…","一句话事件":"…","剧情线":"主线","伏笔埋收":"埋：…","情绪":"扬","章末钩型":"悬念","爽点标记":"小"}]')
+    console.error('条目格式：[{"章号":1,"视角人物":"…","地点":"…","出场人物":"…","一句话事件":"…","剧情线":"主线","伏笔埋收":"埋：…","情绪":"扬","章末钩型":"悬念","爽点强度":"小","爽点类型":"逆袭"}]')
     process.exit(2)
   }
 

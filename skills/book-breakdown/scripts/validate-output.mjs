@@ -36,6 +36,26 @@ function headings(text) {
   return list
 }
 
+// 取某个段的正文（到下一个同级或更高级标题为止），并去掉引用块说明行。
+// 段的标题级别因模板而异：金手指是二级（## 代价与限制），专题是三级（### 定义与范围），
+// 所以按段名匹配任意级别（2-4 级），而不是写死 ###——写死 ## 时整段取不到，
+// 上层的检查就静默失效（W_NO_COST 第一版正是这样一条永不触发的检查）。
+function sectionBody(text, name) {
+  const lines = text.split(/\r?\n/)
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const head = lines.findIndex((l) => new RegExp(`^(#{2,4})\\s+${esc}\\s*$`).test(l))
+  if (head < 0) return null
+  const level = /^(#{2,4})/.exec(lines[head])[1].length
+  const out = []
+  for (let i = head + 1; i < lines.length; i++) {
+    const m = /^(#{1,6})\s/.exec(lines[i])
+    if (m && m[1].length <= level) break
+    if (/^>/.test(lines[i])) continue
+    out.push(lines[i])
+  }
+  return out.join('\n')
+}
+
 // 第一个 Markdown 表：表头列 + 数据行。
 function firstTable(text) {
   const lines = text.split(/\r?\n/)
@@ -222,6 +242,21 @@ export async function validateOutput({ root, mode = 'deliver' }) {
     for (const s of required) {
       if (!found.includes(s)) fail('E_SECTION', rel, `缺少段名「${s}」`)
     }
+    // 金手指的代价写「无」时须附理由与章号（B-06）。
+    // 为什么只警告：一本书真的可以无代价（少数设定如此），硬判错会把合法的书拦下。
+    // 但「无」也不能白写——代价是金手指叙事张力的一半，绝大多数「无」是没找到，不是真没有。
+    if (product === '金手指') {
+      const body = sectionBody(text, '代价与限制')
+      // 该段里出现了「无」这一结论
+      if (body && (/^\s*[-*]?\s*无\s*[（(]?/m.test(body) || /无代价|无限制|没有代价/.test(body))) {
+        // 「章号」二字本身就是模板允许的写法（模板里写「并注明依据章」），
+        // 所以要认的是真的章号，或明写「章号」作指针，而不是段里随便出现这两个字。
+        const hasChapter = /第\s*[0-9一二三四五六七八九十百零]+\s*章/.test(body)
+        if (!hasChapter) {
+          warn('W_NO_COST', rel, '「代价与限制」写「无」但没给依据章号。金手指无代价是少数情况，多数是没找到——补一句（第 N 章「原文」），或复核是否真的无代价')
+        }
+      }
+    }
   }
 
   // 卡片字段存在性（T9）：52 个卡片字段此前零校验——路径不被 productOf() 识别，
@@ -318,14 +353,24 @@ export async function validateOutput({ root, mode = 'deliver' }) {
         }
       })
     }
-    // 取值枚举（Q-23）：情绪、章末钩型与爽点标记；「（待填）」骨架态与空格不报，合法＝以枚举值开头。
+    // 取值枚举（Q-23/A-09）：情绪、章末钩型、爽点强度、爽点类型；「（待填）」骨架态与空格不报，合法＝以枚举值开头。
     // 「情绪」此前漏在校验之外（ENUMS.情绪 定义了却没人用），填任意词都不会变红。
-    for (const [name, values] of [['情绪', ENUMS.情绪], ['章末钩型', ENUMS.钩型], ['爽点标记', ENUMS.爽点标记]]) {
+    for (const [name, values] of [['情绪', ENUMS.情绪], ['章末钩型', ENUMS.钩型], ['爽点强度', ENUMS.爽点强度], ['爽点类型', ENUMS.爽点类型]]) {
       const idx = recordCols.indexOf(name)
       if (idx < 0) continue
+      // 爽点类型是条件必填：强度为「无」时这一格本来就是空的，不是缺失。
+      const strengthIdx = recordCols.indexOf('爽点强度')
       rows.forEach((r, i) => {
         const cell = String(r[idx] ?? '').trim()
-        if (!cell || cell.includes('待填')) return
+        if (!cell || cell.includes('待填')) {
+          if (name === '爽点类型' && strengthIdx >= 0 && String(r[strengthIdx] ?? '').trim() !== '无' && cell === '') {
+            const strength = String(r[strengthIdx] ?? '').trim()
+            if (strength && !strength.includes('待填')) {
+              warn('W_SHARP_TYPE', '工作/逐章记录.md', `第 ${i + 1} 行爽点强度为「${strength}」但没填爽点类型（只有强度为「无」时才可空）`)
+            }
+          }
+          return
+        }
         if (!values.some((v) => cell.startsWith(v))) {
           fail('E_ENUM', '工作/逐章记录.md', `第 ${i + 1} 行${name}「${cell.slice(0, 20)}」不在枚举内（${values.join('、')}）`)
         }
