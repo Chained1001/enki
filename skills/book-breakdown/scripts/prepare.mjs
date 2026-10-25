@@ -845,6 +845,10 @@ export async function persist(analysis, { force = false, iKnow = false, dryRun =
       totalChars: chapters.reduce((n, c) => n + (c.chars ?? 0), 0),
       volumeCount: volumes.length, volumes, batchCount: batches.length, archived,
       dirs: plan.dirs.length, files: files.size + chapters.length + 1,
+      // 章节列表（C-23）：快速模式要「以脚本的切章口径为准」，就得能拿到这份列表。
+      // 只给序号与标题、不带正文：正文在源文件里，agent 按页读，不需要脚本再复制一遍
+      // （带正文会把整本书从 stdout 灌一遍，还逼调用方处理编码）。
+      chapters: chapters.map((c) => ({ no: c.no, title: c.title, chars: c.chars })),
     }
   }
 
@@ -947,6 +951,12 @@ async function main() {
       // 成本预估（Q-22）：批数即按卷处理的会话单位。dry-run 返回 batchCount，落盘返回 batches（计数）。
       const batchCount = r.batches ?? r.batchCount ?? 0
       console.log(`规模预告：${r.chapterCount} 章 / ${batchCount} 批（每批 ≤20 章；批数即按卷处理的会话单位，全书投入≈${batchCount} 个批次）`)
+      // 章节列表（C-23）：快速模式拿这份列表当唯一口径，不再自己手切。
+      // 只印标题不印正文——正文在源文件里，需要时按章号去读。
+      if (r.chapters?.length) {
+        console.log(`章节列表（${r.chapters.length} 章）：`)
+        for (const c of r.chapters) console.log(`  ${c.no}. ${c.title}（${c.chars} 字）`)
+      }
     }
   } catch (error) {
     if (options.json) {
