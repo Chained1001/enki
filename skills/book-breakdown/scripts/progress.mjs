@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url'
 import { ENUMS } from './contract.mjs'
 import { IoError, readManifest, writeFileAtomic } from './io.mjs'
 
-const USAGE = '用法：progress.mjs <产物目录> [--batch-done 卷号:批号]... [--stage 阶段号:状态]... [--file 相对路径:状态]... [--file-state 相对路径]... [--resync-files] [--json] [--help]'
+const USAGE = '用法：progress.mjs <产物目录> [--batch-done 卷号:批号]... [--stage 阶段号:状态]... [--file 相对路径:状态]... [--file-state 相对路径]... [--repair-round 轮次:说明]... [--resync-files] [--json] [--help]'
 
 export class UsageError extends Error {
   constructor(message, code = 'E_PROGRESS') { super(message); this.code = code }
@@ -41,6 +41,8 @@ export function queryProgress(manifest) {
     // 没这个字段时，唯一的读法是让 agent 自己去翻 manifest.json——
     // 那等于把脚本该做的事推回给模型，还多一次读。
     files: manifest.files ?? {},
+    // 修复轮次（C-15）：10 的「三轮停止」要靠它，重跑时不能从 1 重新数。
+    repairs: manifest.repairs ?? [],
   }
 }
 
@@ -76,7 +78,7 @@ export function detectFileState(text, rel = '') {
   return 'filled'
 }
 
-export async function updateProgress({ root, batchDone = [], stage = [], file = [] }) {
+export async function updateProgress({ root, batchDone = [], stage = [], file = [], repairRound = [] }) {
   root = resolve(root)
   const manifestPath = join(root, '工作', 'manifest.json')
   if (!existsSync(manifestPath)) throw new UsageError('产物目录缺少 manifest，请先运行 prepare', 'E_MANIFEST')
@@ -85,6 +87,7 @@ export async function updateProgress({ root, batchDone = [], stage = [], file = 
   manifest.batches ??= []
   manifest.stages ??= []
   manifest.files ??= {}
+  manifest.repairs ??= []
 
   for (const key of batchDone) {
     const m = /^(\d+):(\d+)$/.exec(key)
@@ -120,7 +123,30 @@ export async function updateProgress({ root, batchDone = [], stage = [], file = 
     manifest.files[rel] = want
   }
 
-  const changed = batchDone.length + stage.length + file.length > 0
+  // 修复轮次落盘（C-15）：10 的停止条件是「同一错误修复三轮仍未通过就停」，
+  // 但轮次此前只活在对话里——重跑一次又从头数，于是「三轮」这个上限实际上不存在：
+  // 中断一次就永久重置，可以无限修下去。
+  //
+  // 记的是「第几轮、这一轮修了什么」，不是单纯的计数器：重跑时要知道上一轮改过哪些文件，
+  // 才不会把同一个改法再试一遍。
+  for (const key of repairRound) {
+    const sep = key.indexOf(':')
+    if (sep <= 0) {
+      throw new UsageError(`--repair-round 取值「${key}」应为 轮次:说明，如 1:E_SOURCE 出处补齐`, 'E_ARGS')
+    }
+    const n = Number(key.slice(0, sep))
+    const note = key.slice(sep + 1).trim()
+    if (!Number.isInteger(n) || n < 1) throw new UsageError(`--repair-round 的轮次应为正整数，收到「${key.slice(0, sep)}」`, 'E_ARGS')
+    if (!note) throw new UsageError('--repair-round 的说明不能为空：重跑时要靠它知道上一轮改了什么', 'E_ARGS')
+    // 同一轮重复登记时覆盖而不是追加：重跑同一轮是很常见的，
+    // 追加会让轮次虚高，三轮上限就提前触发。
+    const exist = manifest.repairs.find((r) => r.round === n)
+    if (exist) exist.note = note
+    else manifest.repairs.push({ round: n, note })
+    manifest.repairs.sort((a, b) => a.round - b.round)
+  }
+
+  const changed = batchDone.length + stage.length + file.length + repairRound.length > 0
   if (changed) {
     assertManifestUnchanged(manifestPath, mtimeMs) // 评审 P7：并发写/外部手改 → E_CONFLICT，不覆盖
     await writeFileAtomic(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
@@ -158,7 +184,7 @@ export async function resyncFileStates({ root }) {
 }
 
 export function parseArgs(argv) {
-  const options = { root: undefined, batchDone: [], stage: [], file: [], fileState: [], resync: false, json: false, help: false }
+  const options = { root: undefined, batchDone: [], stage: [], file: [], fileState: [], repairRound: [], resync: false, json: false, help: false }
   let i = 0
   const valueOf = (flag) => {
     const v = argv[++i]
@@ -171,6 +197,7 @@ export function parseArgs(argv) {
     else if (arg === '--stage') options.stage.push(valueOf('--stage'))
     else if (arg === '--file') options.file.push(valueOf('--file'))
     else if (arg === '--file-state') options.fileState.push(valueOf('--file-state'))
+    else if (arg === '--repair-round') options.repairRound.push(valueOf('--repair-round'))
     else if (arg === '--resync-files') options.resync = true
     else if (arg === '--json') options.json = true
     else if (arg === '--help' || arg === '-h') options.help = true
@@ -210,6 +237,11 @@ async function main() {
       console.log(`进度：${progress.book}（${progress.bookType}）`)
       console.log(`批次：${progress.batches.done}/${progress.batches.total} 完成${progress.batches.failed ? `，${progress.batches.failed} 失败` : ''}`)
       console.log(`当前阶段：${stage ? `${stage.id} ${stage.name}（${stage.status}）` : '全部完成'}`)
+      // 修复轮次（C-15）：写上轮次与说明，让人一眼看到「还剩几轮」。
+      if (progress.repairs.length) {
+        console.log(`修复轮次：${progress.repairs.length} 轮（上限 3，超出应停下等用户裁决）`)
+        for (const r of progress.repairs) console.log(`  第${r.round}轮：${r.note}`)
+      }
       // 文件状态（C-24）：只印被问到的那些，不把几十个文件的清单刷屏。
       for (const rel of options.fileState) {
         const state = progress.files[rel.replace(/\\/g, '/')]
