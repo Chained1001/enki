@@ -365,6 +365,33 @@ export async function validateOutput({ root, mode = 'deliver' }) {
     }
   }
 
+  // 报告的要素四表（C-25）。
+  //
+  // 这四张表在一个文件的四个三级小节里，走不了上面「文件名→表名」的一对一映射，所以单独查。
+  // 四张表原先完全没有表头契约：E_COLUMN 管不到，模板里写错一列没人知道。
+  //
+  // 只查含这四个三级标题的文件：快速模式未指定输出路径时只写对话不落文件，报告文件名也由用户定，
+  // 所以按内容认而不写死路径。
+  //
+  // 不做「骨架态跳过」：骨架的报告表头就是模板表头，本来就和契约一致，跳过与否结果相同——
+  // 那是走不到的死代码。写了也只会在变异测试里暴露「删掉也不报」，等于没有。
+  {
+    const REPORT_SECTIONS = [['人物', '报告_人物'], ['设定', '报告_设定'], ['情节线', '报告_情节线'], ['技法', '报告_技法']]
+    for (const { rel, full } of actual) {
+      if (!rel.endsWith('.md')) continue
+      const text = texts.get(rel) ?? await readFile(full, 'utf8')
+      if (!/^###\s+人物\s*$/m.test(text)) continue
+      for (const [name, key] of REPORT_SECTIONS) {
+        const body = sectionBody(text, name)
+        const expected = tableColumns(key)
+        if (body === null) { fail('E_COLUMN', rel, `要素表缺小节「### ${name}」`); continue }
+        const tbl = firstTable(body)
+        if (!tbl) fail('E_COLUMN', rel, `「${name}」要素表缺表格（期望表头：${expected.join('、')}）`)
+        else if (tbl.header.join('|') !== expected.join('|')) fail('E_COLUMN', rel, `「${name}」要素表表头与契约不一致。期望「${expected.join('、')}」，实际「${tbl.header.join('、')}」`)
+      }
+    }
+  }
+
   // 逐章记录行数＝章节数（A-13）
   const rows = tables.get('逐章记录')?.table?.rows ?? []
   if (tables.get('逐章记录')?.table) {

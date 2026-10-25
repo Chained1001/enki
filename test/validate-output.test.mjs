@@ -1206,3 +1206,83 @@ test('C-19：占位判定认手写变体（待填／(待填)／带空格），�
     }
   })
 })
+
+// ---------- C-25：报告的要素四表要有表头契约 ----------
+//
+// 快速模式的 `拆书报告.md` 有四张表（人物/设定/情节线/技法）。它们原先没有表头契约：
+// `E_COLUMN` 管不到，模板里写错一列没人知道。这与「三列还是四列」无关，
+// 是「没契约的产物写错没人知道」这一类问题。
+//
+// 报告文件名由用户指定，所以检查不写死路径：按「含 ### 人物 小节」认。
+
+function reportText(overrides = {}) {
+  const sections = [['人物', '人物'], ['设定', '设定'], ['情节线', '情节线'], ['技法', '技法']]
+  return [
+    '# 拆书报告',
+    '',
+    '- 书名：合成小书',
+    '- 总字数：1000',
+    '- 章节数：3',
+    '',
+    '## 章节摘要',
+    '',
+    '| 序号 | 标题 | 摘要 |',
+    '| --- | --- | --- |',
+    '| 1 | 第一章 | 甲到了车站 |',
+    '',
+    '## 要素',
+    '',
+    ...sections.flatMap(([name, col]) => {
+      const cols = overrides[name] ?? [col, '说明', '首次出现']
+      return [
+        `### ${name}`,
+        '',
+        `| ${cols.join(' | ')} |`,
+        `| ${cols.map(() => '---').join(' | ')} |`,
+        `| 甲 | 主角 | 1 |`,
+        '',
+      ]
+    }),
+    '## 对账',
+    '',
+    '| 项 | 期望 | 实际 | 结论 |',
+    '| --- | --- | --- | --- |',
+    '| 章数 | 3 | 3 | 通过 |',
+    '',
+  ].join('\n')
+}
+
+test('C-25：报告要素四表的表头与契约一致（正向：写得对就不报）', async () => {
+  await withFilled(async (out) => {
+    await writeFile(join(out, '拆书报告.md'), reportText(), 'utf8')
+    const r = await validateOutput({ root: out })
+    assert.deepEqual(
+      r.errors.filter((e) => e.code === 'E_COLUMN' && /拆书报告/.test(e.file)).map((e) => e.message),
+      [],
+      '四表表头都与契约一致时不该报 E_COLUMN',
+    )
+  })
+})
+
+test('C-25：某张要素表的列名被改（如「首次出现」写成「首现」）时报 E_COLUMN', async () => {
+  await withFilled(async (out) => {
+    await writeFile(join(out, '拆书报告.md'), reportText({ 技法: ['技法', '说明', '首现'] }), 'utf8')
+    const r = await validateOutput({ root: out })
+    const hit = r.errors.filter((e) => e.code === 'E_COLUMN' && /技法/.test(e.message))
+    assert.equal(hit.length, 1, `改了一张表的列名，该报 1 条，实际 ${hit.length}`)
+    assert.match(hit[0].message, /技法/, '要点名是哪一张表')
+    assert.match(hit[0].message, /首现/, '要写出实际那一列叫什么，否则人不知道去哪改')
+    assert.match(hit[0].message, /首次出现/, '也要写出期望的列名')
+  })
+})
+
+test('C-25：缺整张要素表（删掉 ### 技法 小节）时报 E_COLUMN，不静默跳过', async () => {
+  await withFilled(async (out) => {
+    const text = reportText().replace(/### 技法[\s\S]*?(?=## 对账)/, '')
+    await writeFile(join(out, '拆书报告.md'), text, 'utf8')
+    const r = await validateOutput({ root: out })
+    const hit = r.errors.filter((e) => e.code === 'E_COLUMN' && /技法/.test(e.message))
+    assert.equal(hit.length, 1, '缺一整张表比改错列名更严重，必须能报出来')
+    assert.match(hit[0].message, /缺小节/, '要说清是缺小节而不是表头不符')
+  })
+})
