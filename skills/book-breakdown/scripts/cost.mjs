@@ -140,6 +140,39 @@ async function listProductFiles(root) {
   return out
 }
 
+// 记录成本到 manifest（C-08）。抽成可导出函数，是为了让「读到写之间被别人改了」
+// 这个竞态能在单测里确定性复现——真起两个进程竞速是不稳定的，测试会时红时绿。
+//
+// options.beforeWrite：测试注入的钩子，在「已合并、尚未写盘」这一刻调用，
+// 用来模拟并发进程在这个窗口里改了 manifest。
+export async function recordCost({ root, stage, input, output, mode = 'record', calls = 1, beforeWrite } = {}) {
+  const manifestPath = join(root, '工作', 'manifest.json')
+  const MAX_ATTEMPTS = 3
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    // 每次尝试都重新读：上一轮的那份可能已过期（并发改过），
+    // 重试用最新版本重新算，绝不用旧副本覆盖。
+    const rawBefore = await readFile(manifestPath, 'utf8')
+    const current = await readManifest(root)
+    const merged = mergeCost(current.cost, { stage, input, output, mode, calls })
+    if (!merged.startedAt) merged.startedAt = current.cost?.startedAt ?? new Date().toISOString()
+    const candidate = { ...current, cost: merged }
+    if (beforeWrite) await beforeWrite({ attempt })
+    // 复核：只有磁盘内容仍与我们读到的那一份逐字相同时才写。
+    // 用内容比对而不是 mtime：Windows 上 mtime 精度约 15ms，
+    // 同一毫秒内的两次写会被判成「没变」，保护就失效了——这条用 mtime 时测试是红的。
+    const rawNow = await readFile(manifestPath, 'utf8')
+    if (rawNow !== rawBefore) continue
+    await writeFileAtomic(manifestPath, `${JSON.stringify(candidate, null, 2)}\n`)
+    return { ok: true, manifest: candidate, attempts: attempt }
+  }
+  return {
+    ok: false,
+    message:
+      `E_CONFLICT：manifest 连续 ${MAX_ATTEMPTS} 次在写入前被其他进程修改（${manifestPath}）。` +
+      '已放弃本次写入以免覆盖并发结果，请重试',
+  }
+}
+
 function parseArgs(argv) {
   const out = { dir: null, record: false, set: false, report: false, check: false, json: false, stage: null, input: null, output: null, calls: 1 }
   for (let i = 0; i < argv.length; i += 1) {
@@ -196,19 +229,23 @@ async function main() {
       console.error('--in 与 --out 至少要给一个')
       process.exit(2)
     }
-    const next = mergeCost(manifest.cost, {
+    const result = await recordCost({
+      root: args.dir,
       stage: args.stage,
       input,
       output,
       mode: args.set ? 'set' : 'record',
       calls: args.calls,
+      // 并发保护在 recordCost 里：读到的内容在写盘前变了就重读重试（C-08）。
     })
-    if (!next.startedAt) next.startedAt = new Date().toISOString()
-    manifest.cost = next
-    await writeFileAtomic(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
-    const s = next.stages[String(args.stage)]
+    if (!result.ok) {
+      console.error(result.message)
+      process.exit(1)
+    }
+    manifest = result.manifest
+    const s = manifest.cost.stages[String(args.stage)]
     console.log(`阶段 ${args.stage}（${STAGE_NAMES[args.stage]}）累计：输入 ${fmt(s.in)}、输出 ${fmt(s.out)}、调用 ${s.calls} 次`)
-    console.log(`全程累计：输入 ${fmt(next.total.in)}、输出 ${fmt(next.total.out)}`)
+    console.log(`全程累计：输入 ${fmt(manifest.cost.total.in)}、输出 ${fmt(manifest.cost.total.out)}`)
     return
   }
 

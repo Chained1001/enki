@@ -12,7 +12,7 @@ import { rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { lowerBound, mergeCost, parseAmount } from '../skills/book-breakdown/scripts/cost.mjs'
+import { lowerBound, mergeCost, parseAmount, recordCost } from '../skills/book-breakdown/scripts/cost.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
@@ -229,6 +229,129 @@ test('产物字数按磁盘内容算，不按 manifest 状态算（填满后下�
     // 同时确认 manifest 的状态确实没变——这正是「两套账」的样子
     const after2 = JSON.parse(readFileSync(join(dir, '工作', 'manifest.json'), 'utf8'))
     assert.equal(after2.files['故事底本/全书设定/世界观.md'], 'skeleton', '夹具前提：状态标签仍写着 skeleton')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ---------- C-08：读-改-写窗口的并发保护 ----------
+//
+// 真问题不是「理论上不优雅」，是会让已完成的批状态静默回退：
+// cost --record 与 progress --file 并发时，后写的那个用自己手里的旧 manifest 整体覆盖，
+// 前者刚写的 status=done / files[...]=filled 就没了，而且没有任何报错——
+// 人只会看到「明明标完了，回头又变回 skeleton」。
+
+test('C-08：读到写之间 manifest 被改 → 重读重试，不覆盖并发写入的批状态', async () => {
+  const dir = makeProduct()
+  try {
+    // 模拟：我们在读到写之间，另一个进程（progress）把第 1 批标成了 done。
+    // 修复前这里会被 cost 的整文件覆盖抹掉。
+    const r = await recordCost({
+      root: dir,
+      stage: 4,
+      input: 1000,
+      output: 200,
+      beforeWrite: async ({ attempt }) => {
+        if (attempt !== 1) return // 只在第一次模拟并发，第二次应正常写盘
+        const p = join(dir, '工作', 'manifest.json')
+        const m = JSON.parse(readFileSync(p, 'utf8'))
+        m.batches ??= []
+        if (!m.batches.length) m.batches.push({ volume: 1, batch: 1, status: 'skeleton' })
+        m.batches[0].status = 'done'
+        writeFileSync(p, JSON.stringify(m, null, 2), 'utf8')
+      },
+    })
+    assert.equal(r.ok, true, '一次冲突后应重试成功，不该直接失败')
+    assert.equal(r.attempts, 2, '应在第 2 次尝试写成')
+    const after = JSON.parse(readFileSync(join(dir, '工作', 'manifest.json'), 'utf8'))
+    assert.equal(after.batches?.[0]?.status, 'done', '并发写入的批状态必须保住，不能被旧副本覆盖')
+    assert.equal(after.cost?.stages?.['4']?.in, 1000, '本次成本也要记上，不能因为重试就丢掉')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('C-08：每次写前都被改 → 3 次后放弃并报 E_CONFLICT，不静默写坏', async () => {
+  const dir = makeProduct()
+  try {
+    const r = await recordCost({
+      root: dir,
+      stage: 4,
+      input: 1000,
+      output: 200,
+      beforeWrite: async () => {
+        // 每次都改：模拟持续有并发写
+        const p = join(dir, '工作', 'manifest.json')
+        const m = JSON.parse(readFileSync(p, 'utf8'))
+        m.book = typeof m.book === 'object' ? m.book : { title: m.book }
+        m.book.title = String(m.book.title ?? '') + 'x'
+        writeFileSync(p, JSON.stringify(m, null, 2), 'utf8')
+      },
+    })
+    assert.equal(r.ok, false, '一直冲突时必须放弃，不能硬写')
+    assert.match(r.message, /E_CONFLICT/, '要报 E_CONFLICT，让人知道发生了什么')
+    assert.match(r.message, /重试/, '要告诉人怎么办')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('C-08：无并发时一次写成，不因为加了保护而多读多写', async () => {
+  const dir = makeProduct()
+  try {
+    const r = await recordCost({ root: dir, stage: 4, input: 500, output: 100 })
+    assert.equal(r.ok, true)
+    assert.equal(r.attempts, 1, '没有冲突就该一次写成——保护不该变成常态重试')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('C-08：累加语义在重试后仍然正确（不会把同一次上报算两遍）', async () => {
+  const dir = makeProduct()
+  try {
+    const r = await recordCost({
+      root: dir,
+      stage: 4,
+      input: 300,
+      output: 50,
+      beforeWrite: async ({ attempt }) => {
+        if (attempt !== 1) return
+        const p = join(dir, '工作', 'manifest.json')
+        const m = JSON.parse(readFileSync(p, 'utf8'))
+        m.batches = [{ volume: 1, batch: 1, status: 'done' }]
+        writeFileSync(p, JSON.stringify(m, null, 2), 'utf8')
+      },
+    })
+    assert.equal(r.ok, true)
+    const after = JSON.parse(readFileSync(join(dir, '工作', 'manifest.json'), 'utf8'))
+    assert.equal(after.cost.stages['4'].in, 300, '重试后累加值必须正好是 300，不能变成 600')
+    assert.equal(after.cost.stages['4'].calls, 1, '调用次数也不能翻倍')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('C-08：重试上限有限且不多——冲突是异常，不能变成死循环', async () => {
+  const dir = makeProduct()
+  let calls = 0
+  try {
+    const r = await recordCost({
+      root: dir,
+      stage: 4,
+      input: 100,
+      output: 10,
+      beforeWrite: async () => {
+        calls += 1
+        const p = join(dir, '工作', 'manifest.json')
+        const m = JSON.parse(readFileSync(p, 'utf8'))
+        m.note = String(calls)
+        writeFileSync(p, JSON.stringify(m, null, 2), 'utf8')
+      },
+    })
+    assert.equal(r.ok, false, '持续冲突必须放弃')
+    assert.ok(calls <= 5, `重试次数必须有限且不多，实际试了 ${calls} 次——上限改成 99 就会卡死在这里`)
+    assert.ok(calls >= 2, '至少要重试一次，否则保护等于没做')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
