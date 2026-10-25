@@ -103,6 +103,28 @@ function firstTable(text) {
 }
 
 // 表行解析：按未转义的竖线切列，单元格内 `\|` 是合法字面量（生成侧 buildArtifacts 的转义约定）。
+// 从幕纲「情绪基调与走向」段取出峰值强度注记（M-09）。
+//
+// 返回：
+//   null                 —— 没写峰值，或写的「无」／占位符（不算错，也不算记了）
+//   { value, ok: true }  —— 写了且在 ENUMS.峰值强度 内
+//   { value, ok: false } —— 写了但不在枚举内（调用方报 E_ENUM）
+//
+// 为什么单独抽出来：内联在校验循环里时，测试只能断「源码提到过 ENUMS.峰值强度」，
+// 而把判定换成写死的四个字后，上方错误信息里的 join(…) 仍然匹配——那种断言
+// 断的是「有没有提到」，不是「还做不做这件事」（变异实测就是这么漏的）。
+export function peakIntensityOf(toneText) {
+  const m = /峰值\s*[：:]\s*([^\n；;，,）)]{0,24})/.exec(String(toneText ?? ''))
+  if (!m) return null
+  const raw = m[1].trim()
+  // 占位符要先判：正则的字符类排掉了「）」，取值会被截成「（待填」，
+  // 于是 val === '（待填）' 永远不成立，骨架态会被报成非法取值。
+  if (!raw || raw.includes('待填')) return null
+  const val = raw.replace(/[（(]\s*$/, '')
+  if (!val || /^无/.test(val)) return null
+  return { value: val, ok: ENUMS.峰值强度.some((e) => val.includes(e)) }
+}
+
 export function parseRow(line) {
   const t = line?.trim() ?? ''
   if (!t.startsWith('|') || !t.endsWith('|')) return null
@@ -614,6 +636,13 @@ export async function validateOutput({ root, mode = 'deliver' }) {
             return ENUMS.情绪.find((e) => m[1].includes(e)) ?? null
           }
           actTone.push({ rel: actRel, start: Number.isFinite(start) ? start : null, enter: pick('入幕'), exit: pick('出口'), tone })
+
+          // 峰值强度取值（M-09）：这一段允许写「峰值：燃」这类注记，取自 ENUMS.峰值强度。
+          // 解析与判定在 peakIntensityOf（纯函数，可单测）。
+          const peak = peakIntensityOf(tone)
+          if (peak && !peak.ok) {
+            fail('E_ENUM', actRel, `峰值强度「${peak.value}」不在枚举内：${ENUMS.峰值强度.join('／')}。峰值是独立字段，不与情绪基调（${ENUMS.情绪.join('／')}）做映射`)
+          }
         }
         // 有起止章的按章号排；没有的保持文件名序（「卷NN-幕NN-」本身自带顺序）
         actTone.sort((a, b) => (a.start ?? Infinity) - (b.start ?? Infinity))
