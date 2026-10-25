@@ -141,12 +141,132 @@ function quotesInLine(line) {
   return [...line.matchAll(QUOTE_SCAN)].map((m) => m[1])
 }
 
+// 这条引句是不是它自己标的那一章的标题。
+// 「章名当引句」在真书产物里很常见（卷纲写「本章名为「雪夜」」），而章名不在章节正文里，
+// 判 notFound 是纯误报。
+//
+// 用**精确相等**，不做 endsWith 之类的模糊匹配。两个理由：
+//   ① 章题带编号前缀（「第二章 雪夜」），而产物里引章名时通常只写「雪夜」——
+//      所以要把前缀去掉再比，而不是靠后缀匹配去凑。
+//   ② 模糊匹配会吃掉正常引句：章题常是「雪夜」「归途」这种常用词，
+//      任何以它结尾的真引句都会被误判成「抄了章名」。判据宁可窄，不可宽。
+function quoteIsChapterTitle(quote, chapters, chapterTitles) {
+  const q = stripPunct(quote)
+  if (!q) return false
+  for (const no of chapters) {
+    const title = chapterTitles.get(no)
+    if (!title) continue
+    if (title === q) return true
+    // 去掉「第N章/节/回」前缀后再精确比一次。
+    const bare = title.replace(/^第[0-9一二三四五六七八九十百千零两]+[章节回][　 ]?/, '')
+    if (bare && bare === q) return true
+  }
+  return false
+}
+
+// ---------- notFound 分流（产物实证 §7.2）----------
+//
+// 「全书找不到」原本是一个笼统的数，但两类完全不是一回事：
+//   可还原：原文确实有这句，只是引句记错了（错别字、漏字、多字、标点差异）——校对问题；
+//   不可还原：全书没有相近的句子——这是编的，真实性问题，严重一个量级。
+// 混在一个数字里，120 条 notFound 到底是「抄错 120 处」还是「编了 120 条」看不出来。
+//
+// 用两个指标，任一达标即判可还原：
+//   LCS 相似度——抓「中间漏了几个字」（4-gram 会因一处漏字整体掉分）；
+//   4-gram 重合率——抓「局部改了词」（LCS 对调换语序不敏感）。
+// 单用哪一个都会漏掉另一类，所以两个都要。
+
+// 4 字滑窗，用 Set 去重：重复的短语只算一次，避免「哈哈哈」这类串刷高重合率。
+function fourGrams(text, n = QUOTE_VERIFY.notFound还原.四字窗长) {
+  const chars = [...text]
+  const grams = new Set()
+  for (let i = 0; i + n <= chars.length; i++) grams.add(chars.slice(i, i + n).join(''))
+  return grams
+}
+
+// 最长公共子序列长度，返回比例（0~1）。只在候选文本上跑，不对全书跑。
+function lcsRatio(a, b) {
+  const x = [...a]
+  const y = [...b]
+  if (!x.length || !y.length) return 0
+  // 引句通常 20-60 字，候选章几千字：一维滚动数组即可，内存 O(len(y))。
+  let prev = new Uint32Array(y.length + 1)
+  let cur = new Uint32Array(y.length + 1)
+  for (let i = 1; i <= x.length; i++) {
+    for (let j = 1; j <= y.length; j++) {
+      cur[j] = x[i - 1] === y[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1])
+    }
+    const t = prev
+    prev = cur
+    cur = t
+    cur.fill(0)
+  }
+  return prev[y.length] / x.length
+}
+
+// 建倒排：4-gram → 出现过它的章号。
+// 全书几十万字一次性建好（约几十万个 gram），之后每条 notFound 只需查表，不做全量扫描。
+function buildGramIndex(chapterText, n = QUOTE_VERIFY.notFound还原.四字窗长) {
+  const index = new Map()
+  for (const [no, text] of chapterText) {
+    for (const g of fourGrams(text, n)) {
+      let list = index.get(g)
+      if (!list) { list = []; index.set(g, list) }
+      list.push(no)
+    }
+  }
+  return index
+}
+
+// 判一条 notFound 引句能不能还原：能则返回还原比例最高的候选（章号 + 指标），否则 null。
+function classifyNotFound(quote, chapterText, gramIndex) {
+  const cfg = QUOTE_VERIFY.notFound还原
+  const grams = fourGrams(quote, cfg.四字窗长)
+  if (!grams.size) return null
+  // 候选章：命中的 gram 数最多的前 N 章。用计数排序，避免对每个 gram 的章号全展开。
+  const hits = new Map()
+  for (const g of grams) {
+    const list = gramIndex.get(g)
+    if (!list) continue
+    for (const no of list) hits.set(no, (hits.get(no) ?? 0) + 1)
+  }
+  if (!hits.size) return null
+  const candidates = [...hits.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, cfg.候选章上限)
+    .map(([no]) => no)
+  let best = null
+  for (const no of candidates) {
+    const text = chapterText.get(no) ?? ''
+    // 4-gram 重合率按引句自身的 gram 数算：候选章越长，越容易「碰巧」全含，这个分母必须固定。
+    const shared = [...grams].filter((g) => text.includes(g)).length
+    const gramRatio = shared / grams.size
+    // LCS 只对窗口跑：候选章可能几千字，直接对整章算会让长章占便宜。
+    // 按引句长度上下浮动 2 倍开窗，取最相似的一段。
+    const qLen = [...quote].length
+    const win = qLen * 2
+    const chars = [...text]
+    let lcs = 0
+    for (let start = 0; start < chars.length; start += Math.max(1, Math.floor(qLen / 2))) {
+      const seg = chars.slice(start, start + win).join('')
+      const r = lcsRatio(quote, seg)
+      if (r > lcs) lcs = r
+      if (lcs >= 1) break
+    }
+    const ok = lcs >= cfg.LCS下限 || gramRatio >= cfg.四字重合率下限
+    if (ok && (!best || lcs + gramRatio > best.lcs + best.gramRatio)) {
+      best = { chapter: no, lcs, gramRatio }
+    }
+  }
+  return best
+}
+
 // ---------- 主流程 ----------
 
 export async function verifyQuotes({ root, maxFindings = DEFAULT_MAX_FINDINGS } = {}) {
   root = resolve(root)
   const problems = []
-  const zero = { total: 0, pass: 0, wrongChapter: 0, notFound: 0, skippedTerms: 0, skippedMeta: 0 }
+  const zero = { total: 0, pass: 0, wrongChapter: 0, notFound: 0, recoverable: 0, unrecoverable: 0, skippedTerms: 0, skippedMeta: 0 }
   const fail = (code, file, message) => problems.push(file ? { code, file, message } : { code, message })
 
   if (!statSync(root, { throwIfNoEntry: false })?.isDirectory()) {
@@ -176,6 +296,13 @@ export async function verifyQuotes({ root, maxFindings = DEFAULT_MAX_FINDINGS } 
     fail('E_IO', '原文/章节/', `原文章节目录为空（${chapterDir}）。请用 prepare 重建产物后再核验`)
     return { ok: false, errors: problems, data: { ...zero, chapters: 0, files: 0, items: [] } }
   }
+  // 章题映射：章号 → 归一后的标题。用来识别「把章名当引句抄」的情况。
+  const chapterTitles = new Map()
+  for (const chapter of manifest.chapters) {
+    if (!chapter || !Number.isInteger(chapter.no)) continue
+    const title = typeof chapter.title === 'string' ? stripPunct(chapter.title) : ''
+    if (title) chapterTitles.set(chapter.no, title)
+  }
   for (const chapter of manifest.chapters) {
     if (!chapter || typeof chapter.file !== 'string' || !Number.isInteger(chapter.no)) continue
     const file = join(chapterDir, chapter.file)
@@ -203,6 +330,10 @@ export async function verifyQuotes({ root, maxFindings = DEFAULT_MAX_FINDINGS } 
   }
   const bookTextWithNote = bookText + authorNoteText
 
+  // notFound 分流用的倒排索引：只在真有 notFound 才建（多数交付物是空的，别白花钱）。
+  // 建索引本身是 O(全书字数)，跑一次；之后每条 notFound 只查表 + 在少数候选章上算 LCS。
+  let gramIndex = null
+
   const docsDir = join(root, '故事底本')
   let docsStat
   try {
@@ -220,6 +351,8 @@ export async function verifyQuotes({ root, maxFindings = DEFAULT_MAX_FINDINGS } 
   let pass = 0
   let wrongChapter = 0
   let notFound = 0
+  let recoverable = 0
+  let unrecoverable = 0
   let skippedTerms = 0
   let skippedMeta = 0
   const found = []
@@ -282,6 +415,10 @@ export async function verifyQuotes({ root, maxFindings = DEFAULT_MAX_FINDINGS } 
       const coordLine = isCoordLine(body)
       for (const quote of quotes) {
         if (coordLine && coordQuoteIsLabel(quote, bookText)) { skippedMeta++; continue }
+        // 章题抄成引句：引句内容就是它所标章号的标题（一字不差），那是把章名当引文，
+        // 不是从正文里引的话。判 notFound 只会制造误报——章名本来就不在正文里
+        // （prepare 切章时写进标题，不重复写进章节正文）。
+        if (quoteIsChapterTitle(quote, chapters, chapterTitles)) { skippedMeta++; continue }
         if (isTermQuote(quote)) { skippedTerms++; continue }
         const segments = validSegments(quote)
         // 全由省略号碎片构成的引句无法定位（最短段长度以下），归入跳过，不制造找不到的误报。
@@ -292,8 +429,18 @@ export async function verifyQuotes({ root, maxFindings = DEFAULT_MAX_FINDINGS } 
         if (segments.every((seg) => declaredText.includes(seg))) { pass++; continue }
         const bucket = segments.every((seg) => bookTextWithNote.includes(seg)) ? 'wrong-chapter' : 'not-found'
         if (bucket === 'wrong-chapter') wrongChapter++
-        else notFound++
-        found.push({ file: `故事底本/${rel}`, line: i + 1, chapters, quote, bucket })
+        else {
+          notFound++
+          // 分流：能还原 vs 不能还原。倒排索引用到才建（全空产物不该付这份钱）。
+          if (!gramIndex) gramIndex = buildGramIndex(chapterText)
+          const restored = classifyNotFound(segments.join(''), chapterText, gramIndex)
+          if (restored) recoverable++
+          else unrecoverable++
+          found.push({ file: `故事底本/${rel}`, line: i + 1, chapters, quote, bucket, restored })
+        }
+        if (bucket === 'wrong-chapter') {
+          found.push({ file: `故事底本/${rel}`, line: i + 1, chapters, quote, bucket })
+        }
       }
     }
   }
@@ -304,7 +451,7 @@ export async function verifyQuotes({ root, maxFindings = DEFAULT_MAX_FINDINGS } 
     ok,
     errors: problems,
     data: {
-      total, pass, wrongChapter, notFound, skippedTerms, skippedMeta,
+      total, pass, wrongChapter, notFound, recoverable, unrecoverable, skippedTerms, skippedMeta,
       chapters: chapterText.size,
       files: scannedFiles,
       truncated: found.length - items.length,
@@ -330,12 +477,21 @@ function humanReport(d) {
   out.push(`  通过 ${d.pass}（${rate(d.pass, d.total)}）`)
   out.push(`  章号不符 ${d.wrongChapter}（${rate(d.wrongChapter, d.total)}）`)
   out.push(`  全书找不到 ${d.notFound}（${rate(d.notFound, d.total)}）`)
+  // 分流：一个数字分不出「抄错了」和「编的」，而这两件事的严重程度差一个量级。
+  if (d.notFound) {
+    out.push(`    其中可还原 ${d.recoverable}（原文有这句，引句记错了——校对问题）`)
+    out.push(`        不可还原 ${d.unrecoverable}（全书没有相近的句子——真实性问题，优先查）`)
+  }
   const groups = [['wrong-chapter', '章号不符', d.wrongChapter], ['not-found', '全书找不到', d.notFound]]
   for (const [bucket, title, count] of groups) {
     if (!count) continue
     out.push(`${title}：`)
     for (const item of d.items.filter((it) => it.bucket === bucket)) {
-      out.push(`  ${item.file}:${item.line} 第${item.chapters.join('、')}章「${item.quote}」`)
+      // 可还原的标出还原到了哪一章、两个指标各多少，省得人工再翻一遍
+      const hint = item.restored
+        ? `　→ 疑为第${item.restored.chapter}章（LCS ${item.restored.lcs.toFixed(2)}／4-gram ${item.restored.gramRatio.toFixed(2)}）`
+        : ''
+      out.push(`  ${item.file}:${item.line} 第${item.chapters.join('、')}章「${item.quote}」${hint}`)
     }
   }
   if (d.truncated > 0) out.push(`（仅列出前 ${d.items.length} 条问题，共 ${d.wrongChapter + d.notFound} 条，完整计数见上）`)

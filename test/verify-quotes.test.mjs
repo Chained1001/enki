@@ -28,7 +28,7 @@ function manifestOf(chapters) {
   return {
     chapterCount: chapters.length,
     volumes: [],
-    chapters: chapters.map((c) => ({ no: c.no, file: c.file })),
+    chapters: chapters.map((c) => ({ no: c.no, file: c.file, title: c.title ?? c.file.replace(/^\d+-/, '').replace(/\.txt$/, '') })),
   }
 }
 
@@ -487,5 +487,223 @@ after(async () => {
     await rmdir(TMP_BASE)
   } catch (error) {
     if (error.code !== 'ENOTEMPTY' && error.code !== 'ENOENT') throw error
+  }
+})
+
+// ---------- notFound 分流（产物实证 §9.2 第 8 条 / #26）----------
+//
+// 「全书找不到」原本是一个笼统的数，但「抄错了」和「编的」严重程度差一个量级：
+// 前者是校对问题，后者是真实性问题。分不出来，报告就没法用。
+//
+// 夹具格式注意：引句必须写在**带章号的列表行**里（`- 结论：…（第 N 章「引句」）。`），
+// 否则脚本按「没有章号的行不归我判」直接跳过，total=0、分流永远不触发——
+// 一开始我把引句写成散文段，用例全绿但什么都没测到。
+
+// 可还原：原文有这句，引句里漏了一个字。
+// 4-gram 会因此掉一点分（0.89），LCS 仍满分 —— 两个指标一起判才判得准。
+test('notFound 分流：原文有这句、引句漏字 → 判可还原', async () => {
+  const dir = await makeProduct([
+    '- 漏字那条：原文里确实有这句话（第 1 章「张三走进车站，月台上空无一人。」）。',
+    '- 这条漏了一个字：张三走进车站，月台上空无人（第 2 章「张三走进车站，月台上空无人。」）。',
+  ])
+  try {
+    const r = await verifyQuotes({ root: dir })
+    assert.ok(r.data.total >= 2, `夹具里的引句要真进统计，否则这条用例什么都没测到（total=${r.data.total}）`)
+    assert.equal(r.data.notFound, r.data.recoverable + r.data.unrecoverable, '两档之和必须等于 notFound')
+    assert.equal(r.data.unrecoverable, 0, '漏一个字的引句该判可还原，不该判「编的」')
+    assert.ok(r.data.recoverable >= 1, '至少那条漏字的要判可还原')
+    // 还原到了哪一章也要说对，否则「可还原」只是个含糊的好消息
+    const hit = r.data.items.find((x) => x.bucket === 'not-found' && x.restored)
+    assert.equal(hit.restored.chapter, 1, '应还原到第 1 章——那句原文在那里')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// 不可还原：全书没有相近的句子 —— 编的。
+test('notFound 分流：全书没有相近句子 → 判不可还原', async () => {
+  const dir = await makeProduct([
+    '- 结论：这句是编的（第 1 章「紫气东来三万里，一剑光寒十九洲。」）。',
+  ])
+  try {
+    const r = await verifyQuotes({ root: dir })
+    assert.equal(r.data.total, 1, '这条必须真进统计')
+    assert.equal(r.data.recoverable, 0, '全书没有相近句子时不能判可还原')
+    assert.equal(r.data.unrecoverable, 1, '编造的引句必须判不可还原')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// 两个阈值各自都要能改红用例 —— 只看一个指标会让另一类漏判。
+// 这一条锁 LCS：引句中间漏了字，4-gram 掉到 1.0 以下但 LCS 仍高。
+test('分流判据：LCS 与 4-gram 任一达标即算可还原（单看一个会漏判）', async () => {
+  const dir = await makeProduct([
+    // 漏了两个字，gram 重合率约 0.8，LCS 仍接近 1
+    '- 漏两字：我们把事情做了整整二十年（第 1 章「我们把事情做了整整二十年。」）。',
+  ])
+  try {
+    const r = await verifyQuotes({ root: dir })
+    const item = r.data.items.find((x) => x.bucket === 'not-found')
+    assert.ok(item, '这条应判 not-found（不是一字不差）')
+    assert.ok(item.restored, 'LCS 高说明原文有这句，必须判可还原')
+    assert.ok(item.restored.lcs >= QUOTE_VERIFY.notFound还原.LCS下限, 'LCS 应达到阈值')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// 边界一：和某章共享一点字词、但整体完全是另一句话 —— 这仍是「编的」。
+// 这条专门锁 LCS 阈值：若把阈值调到 0，任何有候选的引句都会变成「可还原」，
+// 于是「编了个沾边的句子」就被美化成了「抄错几个字」。
+test('分流边界：只沾几个字、整体不同 → 仍判不可还原', async () => {
+  const dir = await makeProduct([
+    // 与第 1 章的「张三走进车站，月台上空无一人。」只共享「张三走进」四个字
+    '- 沾边的：张三走进了另一座城市的车站候车大厅（第 2 章「张三走进了另一座城市的车站候车大厅」）。',
+  ])
+  try {
+    const r = await verifyQuotes({ root: dir })
+    assert.equal(r.data.total, 1)
+    assert.equal(r.data.recoverable, 0, '只共享几个字的句子不是「抄错」，不能判可还原')
+    assert.equal(r.data.unrecoverable, 1, '这仍属于「全书没有这句」，应判不可还原')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// 边界二：原文的句子被拆开重排（两处拼接、语序打乱）。
+// 4-gram 全命中但 LCS 低——这条锁 4-gram 阈值：只看 LCS 会判成「编的」，
+// 而它的每个片段都确实出自原文，该判可还原。
+test('分流边界：原文片段重排 → 4-gram 达标即可判可还原', async () => {
+  const dir = await makeProduct([
+    // 第 1 章正文有「我们所做的事情，我们已经做了整整二十年。」
+    // 引句把它前后半句对调：gram 基本全在，LCS 明显下降
+    '- 重排的：我们已经做了整整二十年我们所做的事情（第 2 章「我们已经做了整整二十年我们所做的事情」）。',
+  ])
+  try {
+    const r = await verifyQuotes({ root: dir })
+    const item = r.data.items.find((x) => x.bucket === 'not-found')
+    assert.ok(item, '这条应判 not-found')
+    assert.ok(item.restored, '片段都出自原文，应判可还原——只看 LCS 会漏掉这一类')
+    assert.ok(
+      item.restored.gramRatio >= QUOTE_VERIFY.notFound还原.四字重合率下限,
+      `4-gram 重合率应达标（实际 ${item.restored.gramRatio.toFixed(2)}）`,
+    )
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// 边界三：章题是常用短词时，不能把别的章的普通引句吃掉。
+// 这条锁「只与该行标注的章比」——若改成在全書所有章题里比，
+// 「雪夜」这类短章题会把大量含这两个字的正常引句误跳过。
+test('章题规则只在标注章内比：别的章的章题不吃正常引句', async () => {
+  // 构造「会被误吃」的形状：第 2 章纯标题是「白帝城的雨夜」，
+  // 第 1 章正文里有一句**恰好等于**这个字符串的话。
+  // 规则若改成「在全书所有章题里比」，这条会被误判成「抄了第 2 章章名」而跳过。
+  // 构造「必被误吃」的形状需要同时满足三个条件（我在这里连踩两次）：
+  //   ① 引句**精确等于**第 2 章的纯标题 —— 否则全书比也不会命中；
+  //   ② 该标题长于 QUOTE_VERIFY.术语长度上限（10 字）—— 否则先被术语规则拦下；
+  //   ③ 该字符串确实出现在第 1 章正文里 —— 这样它才是一条「真引句」。
+  const TITLE = '白帝城的雨夜与那盏未灭的灯'
+  const chapters = [
+    { no: 1, file: '0001-第一章 甲.txt', title: '第一章 甲', text: `第一章 甲\n他反复念着那七个字：${TITLE}。\n` },
+    { no: 2, file: `0002-第二章 ${TITLE}.txt`, title: `第二章 ${TITLE}`, text: `第二章 ${TITLE}\n乙段内容写在第二章这一章里。\n` },
+  ]
+  const dir = await makeProduct([
+    // 标的是第 1 章；引句精确等于第 2 章纯标题，但它确实在第 1 章正文里
+    `- 结论：「${TITLE}」（第 1 章）。`,
+  ], chapters)
+  try {
+    const r = await verifyQuotes({ root: dir })
+    assert.equal(r.data.pass, 1, '第 1 章正文里的引句必须判通过，不能因为第 2 章标题同名就被跳过')
+    assert.equal(r.data.skippedMeta, 0, '这条不该进跳过计数')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// 去掉编号前缀后精确比：章题是「第三章 白帝城的雨夜」、产物引「白帝城的雨夜」，也该认出来。
+test('章题比对会去掉「第N章」前缀', async () => {
+  const chapters = [
+    { no: 3, file: '0003-第三章 白帝城的雨夜.txt', title: '第三章 白帝城的雨夜', text: '第三章 白帝城的雨夜\n丙段内容出现在第三章的结尾处。\n' },
+  ]
+  const dir = await makeProduct([
+    '- 本章名为「白帝城的雨夜」（第 3 章）。',
+  ], chapters)
+  try {
+    const r = await verifyQuotes({ root: dir })
+    assert.ok(r.data.skippedMeta >= 1, '章题带编号前缀时，去掉前缀后仍要认出纯标题')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// 反过来：把带编号的完整章题当引句，也该认出来。
+test('章题比对也认带编号的完整写法', async () => {
+  const chapters = [
+    { no: 3, file: '0003-第三章 白帝城的雨夜.txt', title: '第三章 白帝城的雨夜', text: '第三章 白帝城的雨夜\n丙段内容出现在第三章的结尾处。\n' },
+  ]
+  const dir = await makeProduct([
+    '- 本章名为「第三章 白帝城的雨夜」（第 3 章）。',
+  ], chapters)
+  try {
+    const r = await verifyQuotes({ root: dir })
+    assert.ok(r.data.skippedMeta >= 1, '完整章题写法也应认出，不能只认纯标题')
+    assert.equal(r.data.notFound, 0, '完整章题不该被判找不到')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// 章题当引句：章名不在章节正文里，判 notFound 是纯误报。
+test('章题抄成引句 → 跳过，不计入 notFound', async () => {
+  // 章题要长于 QUOTE_VERIFY.最短段长度，否则先被术语规则拦下（那就测不到章题这条了）
+  const chapters = [
+    { no: 1, file: '0001-第一章 甲.txt', title: '第一章 甲', text: '第一章 甲\n甲段正文在这里第一次出现。\n' },
+    { no: 3, file: '0003-第三章 白帝城的雨夜.txt', title: '第三章 白帝城的雨夜', text: '第三章 白帝城的雨夜\n丙段内容出现在第三章的结尾处。\n' },
+  ]
+  const dir = await makeProduct([
+    // 产物里记章名时通常只写纯标题（不带「第三章」），这才是真实写法
+    '- 本章名为「白帝城的雨夜」（第 3 章）。',
+  ], chapters)
+  try {
+    const r = await verifyQuotes({ root: dir })
+    assert.equal(r.data.notFound, 0, '章题不是正文引句，不该判找不到')
+    assert.ok(r.data.skippedMeta >= 1, '应归入跳过而不是找不到')
+    assert.equal(r.data.total, 0, '章题根本不该进统计')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// 反例：正常引句不能被章题规则吃掉。
+// 章题常是常用词，若在全书所有章题里比，正常短引句会被大量误跳过。
+test('章题规则不吃正常引句：只与该行标注的章比', async () => {
+  const dir = await makeProduct([
+    '- 结论：「我们所做的事情，我们已经做了整整二十年。」（第 1 章）。',
+  ])
+  try {
+    const r = await verifyQuotes({ root: dir })
+    assert.equal(r.data.pass, 1, '真引句必须判通过，不能被章题规则跳过')
+    assert.equal(r.data.skippedMeta, 0, '这条不该进跳过计数')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// humanReport 必须把两档分行打印，否则分流等于没做。
+test('humanReport 把可还原与不可还原分行打印', async () => {
+  const dir = await makeProduct([
+    '- 结论：编的句子（第 1 章「紫气东来三万里，一剑光寒十九洲。」）。',
+  ])
+  try {
+    const out = runCli([dir])
+    assert.match(out.stdout, /可还原/, '报告里要有「可还原」这一行')
+    assert.match(out.stdout, /不可还原/, '报告里要有「不可还原」这一行')
+    assert.match(out.stdout, /校对问题/, '要说明可还原是校对问题，否则看报告的人不知道怎么处理')
+    assert.match(out.stdout, /真实性/, '要说明不可还原是真实性问题')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
   }
 })
