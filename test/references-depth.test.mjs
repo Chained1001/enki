@@ -18,10 +18,15 @@ const refDir = join(here, '..', 'skills', 'book-breakdown', 'references')
 // 已按「详细说明书」标准搬运完成的文件。新增文件必须先补内容才能进此表。
 // 这份清单是「进度账」而非白名单：不在表里的文件不受本测试约束（仍是索引卡形态）。
 // 幕边界判据不在内：它是判据件（J 编号），本来就以表格为主，不搬知识库方法论正文。
+// #22 把《人物提炼策略》拆成了判据层与解读层，两层各自有不同的合格标准：
+//   判据层：三类小节（机制/判据/错误）都要有，因为它是判定时要读的东西，判据与反例必须同屏；
+//   解读层：只要求「有机制解释且正文充分」——判据与错误表已经搬到判据层，这里再要求一遍就是重复。
 const PORTED = [
   '幕与节奏策略.md', '结构拆解策略.md', '伏笔识别策略.md',
-  '人物提炼策略.md', '设定提炼策略.md',
+  '判据/人物提炼判据.md', '设定提炼策略.md',
 ]
+// 只要求「机制充分」的分层文件（不含判据与错误表，那是判据层的职责）。
+const PORTED_INTERPRETATION = ['解读/人物提炼解读.md']
 
 // 搬运节必须含的三类小标题（知识库方法论各节的固定骨架）。
 // 只要求「机制＋判据＋错误」三类：这三类缺任一类，文件就退回成一句动作。
@@ -32,7 +37,14 @@ const REQUIRED_KINDS = [
   { name: '常见错误', re: /^#{3,6} .*常见错误/m },
 ]
 
-const read = (f) => readFileSync(join(refDir, f), 'utf8')
+// 按文件名解析：先 references/ 平铺，再 判据/ 与 解读/ 子目录（#22 拆层后）。
+// 文件名在 references 下唯一，所以测试只关心内容、不必关心它在哪一层。
+const read = (f) => {
+  for (const p of [join(refDir, f), join(refDir, '判据', f), join(refDir, '解读', f)]) {
+    try { return readFileSync(p, 'utf8') } catch (e) { if (e.code !== 'ENOENT') throw e }
+  }
+  throw new Error(`references 下找不到 ${f}（平铺、判据/、解读/ 都试过了）`)
+}
 
 // 正文行：非空、非表格、非标题、非引用块、非列表短项。用于衡量「有没有解释」。
 function proseLines(text) {
@@ -55,10 +67,19 @@ test('references 已搬运文件含机制/判据/常见错误三类小节，且�
     const lines = text.split(/\r?\n/).length
     assert.ok(lines >= 80, `${f} 仅 ${lines} 行（下限 80）——搬运整节后不应这么短`)
   }
+  // 解读层：#22 拆出来的那份只保证「机制解释齐全、正文够厚」。
+  // 它不该有判据与错误表——那些在判据层，两边都放等于要人读两份。
+  for (const f of PORTED_INTERPRETATION) {
+    const text = read(f)
+    assert.ok(REQUIRED_KINDS[0].re.test(text), `${f} 缺「机制」小节——解读层至少要解释为什么有效`)
+    const prose = proseLines(text)
+    assert.ok(prose >= 20, `${f} 正文仅 ${prose} 行（下限 20）——解读层不能只剩表格`)
+  }
 })
 
 test('references 保留速查表：编号策略行不得因搬运而丢失', () => {
   // 速查表是 agent 的快速定位入口，搬运不得把它替换掉；两种形态必须共存。
+  // #22 拆层后 S- 表在判据层（`判据/人物提炼判据.md`），所以 PORTED 里写的是拆分后的路径。
   const tableRe = /^\| [A-Z]-\d{2} \|/m
   for (const f of PORTED) {
     assert.ok(tableRe.test(read(f)), `${f} 丢了编号速查表（形如「| S-01 |」），它是 agent 的定位入口`)

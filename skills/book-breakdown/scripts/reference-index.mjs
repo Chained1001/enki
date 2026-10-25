@@ -91,27 +91,36 @@ export function buildIndex(files) {
   out.push('')
   out.push('| 要做什么 | 读哪些节 |')
   out.push('|---|---|')
-  out.push('| 建主角五文件 | `人物提炼策略.md` 的「主角三要素与三级欲望链」「读者凭什么跟百万字」「主角成长弧怎么排」「人物认知怎么控制」 |')
-  out.push('| 建主要配角深化卡 | 同文件「配角与群像」「人物关系怎么织」 |')
-  out.push('| 建反派卡 | 同文件「反派：三层与强度」 |')
-  out.push('| 定主次档位 | `主次判定判据.md` 全份（仅 1.1k tokens） |')
+  out.push('| 建主角五文件 | `判据/人物提炼判据.md` 全份（约 6k tokens，已可整读）「读者凭什么跟百万字」「主角成长弧怎么排」「人物认知怎么控制」 |')
+  out.push('| 建主要配角深化卡 | `判据/人物提炼判据.md` 的「配角与群像」「人物关系怎么织」 |')
+  out.push('| 建反派卡 | `判据/人物提炼判据.md` 的「反派：三层与强度」 |')
+  out.push('| 定主次档位 | `判据/主次判定判据.md` 全份（仅 1.1k tokens） |')
   out.push('| 填六专题 | `设定提炼策略.md` 的「世界铁则与规则」「力量体系与天花板」（地理/年表类专题还需「随文潜入与世界观暗面」） |')
-  out.push('| 判金手指类型与边界 | `金手指判据.md` 全份（仅 0.6k tokens） |')
+  out.push('| 判金手指类型与边界 | `判据/金手指判据.md` 全份（仅 0.6k tokens） |')
   out.push('| 写文风定性六段 | `文风分析策略.md` 全份（仅 0.7k tokens） |')
-  out.push('| 幕判定与卷纲 | `幕边界判据.md` 全份 + `幕与节奏策略.md` 全份（合计约 5k） |')
+  out.push('| 幕判定与卷纲 | `判据/幕边界判据.md` 全份 + `幕与节奏策略.md` 全份（合计约 5k） |')
   out.push('| 全书大纲与骨架定位 | `结构拆解策略.md` 全份（约 2.1k）+ `拆书概念辞典.md`（约 1.2k） |')
   out.push('| 伏笔识别与对账 | `伏笔识别策略.md` 全份（约 2k） |')
   out.push('')
   return out.join('\n')
 }
 
+// 递归收集 references/ 下的 .md（含 判据/ 与 解读/ 两个子目录）。
+// 名字用相对 references/ 的路径（如 "判据/人物提炼判据.md"），索引里直接显示这个路径，
+// 调用方按它拼 read 的路径就不会漏掉子目录——#22 把判据层与解读层拆进子目录后，
+// 只扫一层的旧写法会让拆出来的文件整个不出现在索引里。
 async function loadFiles() {
-  const names = (await readdir(refDir)).filter((f) => f.endsWith('.md') && f !== INDEX_NAME)
   const files = []
-  for (const name of names.sort()) {
-    files.push({ name, text: await readFile(join(refDir, name), 'utf8') })
+  async function walk(dir, prefix) {
+    for (const ent of await readdir(dir, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${ent.name}` : ent.name
+      if (ent.isDirectory()) { await walk(join(dir, ent.name), rel); continue }
+      if (!ent.name.endsWith('.md') || ent.name === INDEX_NAME) continue
+      files.push({ name: rel, text: await readFile(join(dir, ent.name), 'utf8') })
+    }
   }
-  return files
+  await walk(refDir, '')
+  return files.sort((x, y) => x.name.localeCompare(y.name, 'zh'))
 }
 
 async function main() {

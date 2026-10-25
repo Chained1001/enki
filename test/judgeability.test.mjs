@@ -12,7 +12,14 @@ import { THRESHOLDS } from '../skills/book-breakdown/scripts/contract.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const refDir = join(here, '..', 'skills', 'book-breakdown', 'references')
-const read = (f) => readFileSync(join(refDir, f), 'utf8')
+// 按文件名解析：先 references/ 平铺，再 判据/ 与 解读/ 子目录（#22 拆层后）。
+// 文件名在 references 下唯一，所以测试只关心内容、不必关心它在哪一层。
+const read = (f) => {
+  for (const p of [join(refDir, f), join(refDir, '判据', f), join(refDir, '解读', f)]) {
+    try { return readFileSync(p, 'utf8') } catch (e) { if (e.code !== 'ENOENT') throw e }
+  }
+  throw new Error(`references 下找不到 ${f}（平铺、判据/、解读/ 都试过了）`)
+}
 
 test('主次判定 J-01 的 15% 阈值有契约键，且判据文本指向它', () => {
   assert.equal(THRESHOLDS.主角视角章占比, 0.15)
@@ -103,7 +110,7 @@ test('金手指 J-01 是记录句，不是必然句；J-04 有可查锚点', () 
 })
 
 test('金句锚（S-09）不再评价优劣，改为记录被重复引用的句子', () => {
-  const t = read('人物提炼策略.md')
+  const t = read('判据/人物提炼判据.md')
   const row = /^\|\s*S-09\s*\|(.*)$/m.exec(t)
   assert.ok(row)
   assert.match(row[1], /不评价优劣/, '须明写不评价')

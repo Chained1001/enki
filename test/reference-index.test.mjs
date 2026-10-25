@@ -35,11 +35,19 @@ test('切节：行数等于 止-起+1，字符数非零', () => {
 
 test('索引与磁盘上的 索引.md 完全一致（防止改动正文后忘记重生成）', async () => {
   const { readdir } = await import('node:fs/promises')
-  const names = (await readdir(refDir)).filter((f) => f.endsWith('.md') && f !== '索引.md')
+  // 递归收集：references/ 下已有 判据/ 与 解读/ 两个子目录（#22）。
+  // 只扫一层会让拆出去的文件整个不出现在索引里，而索引看起来仍然「一致」。
   const files = []
-  for (const name of names.sort()) {
-    files.push({ name, text: await readFile(join(refDir, name), 'utf8') })
+  async function walk(dir, prefix) {
+    for (const ent of await readdir(dir, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${ent.name}` : ent.name
+      if (ent.isDirectory()) { await walk(join(dir, ent.name), rel); continue }
+      if (!ent.name.endsWith('.md') || ent.name === '索引.md') continue
+      files.push({ name: rel, text: await readFile(join(dir, ent.name), 'utf8') })
+    }
   }
+  await walk(refDir, '')
+  files.sort((x, y) => x.name.localeCompare(y.name, 'zh'))
   const expected = buildIndex(files)
   const actual = await readFile(join(refDir, '索引.md'), 'utf8')
   assert.equal(
@@ -50,7 +58,10 @@ test('索引与磁盘上的 索引.md 完全一致（防止改动正文后忘记
 })
 
 test('索引里列出的行范围确实指向该小节标题（抽查最大的两个文件）', async () => {
-  for (const name of ['人物提炼策略.md', '设定提炼策略.md']) {
+  // #22 拆层后
+  // 「人物提炼策略」拆成了 判据/人物提炼判据.md（6.3k）与 解读/人物提炼解读.md（15.6k），
+  // 后者成为 references 下最大的一份，正是最该抽查行范围的对象。
+  for (const name of ['解读/人物提炼解读.md', '设定提炼策略.md']) {
     const text = await readFile(join(refDir, name), 'utf8')
     const lines = text.split(/\r?\n/)
     for (const s of sliceSections(text)) {
@@ -67,7 +78,7 @@ test('索引里列出的行范围确实指向该小节标题（抽查最大的�
 // 根因是 split(/\r?\n/) 在文件末尾留一个空元素，末节没有「下一个小标题」可减一，
 // 于是按索引翻文件会多读一个空行。这条断言锁住「止不能越过真实末行」。
 test('切节：每节的止行不超过真实末行，且末节止行就是最后一个非空行', async () => {
-  for (const name of ['人物提炼策略.md', '设定提炼策略.md', '幕与节奏策略.md', '拆解总策略.md']) {
+  for (const name of ['判据/人物提炼判据.md', '解读/人物提炼解读.md', '设定提炼策略.md', '幕与节奏策略.md', '拆解总策略.md']) {
     const text = await readFile(join(refDir, name), 'utf8')
     const lines = text.split(/\r?\n/)
     // 真实末行（1 基）= 最后一个非空行的行号

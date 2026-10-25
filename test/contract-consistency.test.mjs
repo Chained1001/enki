@@ -163,7 +163,7 @@ test('目录契约与 PRD 产物结构一致', async () => {
 
 test('阈值与判据、PRD 一致', async () => {
   const prd = await readFile(join(root, 'docs', '产品', 'PRD.md'), 'utf8')
-  const judge = await readFile(join(root, 'skills', 'book-breakdown', 'references', '主次判定判据.md'), 'utf8')
+  const judge = await readFile(join(root, 'skills', 'book-breakdown', 'references', '判据', '主次判定判据.md'), 'utf8')
   assert.ok(judge.includes('60%'), '判据缺主角阈值 60%')
   assert.ok(judge.includes('30%'), '判据缺弧内阈值 30%')
   assert.ok(judge.includes('10 倍'), '判据缺别名归并 10 倍')
