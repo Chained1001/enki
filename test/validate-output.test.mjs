@@ -197,9 +197,11 @@ async function makeFilledProduct() {
     // 十一列跟进（Q-23/Q-24 跟进）：类型/回收幕/重要度取合法枚举。
     ['F001', '信物', '道具', '第1章', '第2章', '第5章', '卷01-幕02', '4', '张三', '主线', '已收'],
   ]))
+  // 总表的叙述列是卷纲的**压缩**，不是照抄（C-19 会把逐字重合报出来）。
+  // 夹具要体现这个关系：卷纲段里是同段的全句，总表这格只留关键词。
   await writeRel('故事底本/故事剧情/分卷总表.md', tableFile('分卷总表', '分卷总表', [
     // 十五列跟进（Q-23/Q-24 跟进）：本卷主要对手/追读钩入列，商业外证写「无」＝无数据。
-    ['01', '全书', '书名', '1-5', '5', '100/20', '相遇钩', '关系困局', '李四', '成长', '车站', '定格', '下一卷悬念', '三天', '无'],
+    ['01', '全书', '书名', '1-5', '5', '100/20', '相遇钩', '关系困局', '李四', '成长', '车站', '悬念钩', '下一卷悬念', '三天', '无'],
   ]))
 
   // 同步 manifest.files 的状态（B-06）：prepare 写下的是 skeleton，上面这一段已经把内容填好了。
@@ -1045,5 +1047,162 @@ test('C-09：增量目录的命名规则是收紧的，不是整个 工作/ 放�
       ['工作/增量/幕01.txt', '工作/增量/幕1.json', '工作/增量/随便.md'].sort(),
       '白名单要按名字收紧：只认 幕NN.json 与 阶段NN-装置.md，不能整个 工作/ 放行',
     )
+  })
+})
+
+// ---------- C-19：分卷总表照抄卷纲 ----------
+//
+// 总表的叙述列是「从卷纲压缩来的」，但压缩和照抄在产物上长得一样。
+// 真书实测「一句话钩子」与卷纲同段逐字相同——说明「压缩」实为复制，这一列等于白填。
+//
+// 有意只做「照抄」一个方向，不判「过期」：压缩本来就该只留关键词，
+// 低重合是完全正确的写法。第一版拿低重合当过期，fixture 里四个正常列全被误报。
+
+test('C-19：总表叙述列逐字照抄卷纲时报 W_TABLE_STALE', async () => {
+  await withFilled(async (out) => {
+    const volRel = '故事底本/故事剧情/卷纲/卷01-全书.md'
+    const tableRel = '故事底本/故事剧情/分卷总表.md'
+    const volText = await readFile(join(out, volRel), 'utf8')
+
+    // 把卷纲「主要冲突与对手」整段灌进总表的「核心压力源」格 → 必报
+    const body = /## 主要冲突与对手\n\n(.+)/.exec(volText)?.[1]?.trim()
+    assert.ok(body, '夹具卷纲应有「主要冲突与对手」段')
+    const table = await readFile(join(out, tableRel), 'utf8')
+    const patched = table.split('\n').map((line) => {
+      if (!line.startsWith('| 01 ')) return line
+      const cells = line.slice(1, -1).split('|').map((c) => c.trim())
+      cells[7] = body // 核心压力源（第 8 列）
+      return `| ${cells.join(' | ')} |`
+    }).join('\n')
+    await writeFile(join(out, tableRel), patched, 'utf8')
+
+    const r = await validateOutput({ root: out })
+    const hit = r.errors.filter((w) => w.code === 'W_TABLE_STALE')
+    assert.equal(hit.length, 1, `该报 1 条照抄告警，实际 ${hit.length}：${hit.map((h) => h.message).join('；')}`)
+    assert.match(hit[0].message, /核心压力源/, '要点名是哪一列')
+    assert.match(hit[0].message, /照抄/, '要说清问题性质是照抄，不是「不一致」')
+  })
+})
+
+test('C-19：总表只留关键词（真压缩）时不报——压缩本来就该低重合', async () => {
+  await withFilled(async (out) => {
+    const tableRel = '故事底本/故事剧情/分卷总表.md'
+    const table = await readFile(join(out, tableRel), 'utf8')
+    // 全句压成关键词：这是正确写法，重合度极低，但绝不能报
+    const patched = table.split('\n').map((line) => {
+      if (!line.startsWith('| 01 ')) return line
+      const cells = line.slice(1, -1).split('|').map((c) => c.trim())
+      cells[7] = '公司' // 卷纲那段是「卷纲·主要冲突与对手」，这里只留关键词
+      cells[11] = '悬念' // 卷纲那段是「卷纲·卷末收束与悬念定格」
+      return `| ${cells.join(' | ')} |`
+    }).join('\n')
+    await writeFile(join(out, tableRel), patched, 'utf8')
+
+    const r = await validateOutput({ root: out })
+    const hit = r.errors.filter((w) => w.code === 'W_TABLE_STALE')
+    assert.deepEqual(hit.map((h) => h.message), [], '低重合是正常压缩，不该报——这条防的正是把好写法报成问题')
+  })
+})
+
+test('C-19：总表未填（还有占位）时不参与比对，不制造噪音', async () => {
+  await withFilled(async (out) => {
+    const tableRel = '故事底本/故事剧情/分卷总表.md'
+    const table = await readFile(join(out, tableRel), 'utf8')
+    const patched = table.split('\n').map((line) => {
+      if (!line.startsWith('| 01 ')) return line
+      const cells = line.slice(1, -1).split('|').map((c) => c.trim())
+      cells[7] = '（待填）'
+      return `| ${cells.join(' | ')} |`
+    }).join('\n')
+    await writeFile(join(out, tableRel), patched, 'utf8')
+    const r = await validateOutput({ root: out })
+    assert.equal(r.errors.filter((w) => w.code === 'W_TABLE_STALE').length, 0, '整表未填时该跳过，而不是把每个空列都报一遍')
+  })
+})
+
+// 照抄还有一种常见形态：把卷纲整段搬过来**又补了几句自己的评语**。
+// 这时正向重合会被拉低（格子里有段外内容），只有反向重合还高——
+// 用 min 才能抓住它；只看正向会漏掉这一类，而它恰恰是最常见的「假装压缩」。
+test('C-19：整段搬来又加评语时仍算照抄（正向会被稀释，反向不会）', async () => {
+  await withFilled(async (out) => {
+    const volRel = '故事底本/故事剧情/卷纲/卷01-全书.md'
+    const tableRel = '故事底本/故事剧情/分卷总表.md'
+    const volText = await readFile(join(out, volRel), 'utf8')
+    const body = /## 主要冲突与对手\n\n(.+)/.exec(volText)?.[1]?.trim()
+    assert.ok(body, '夹具卷纲应有「主要冲突与对手」段')
+    // 加上比原文更长的补充说明：正向分母变大、比率被稀释，反向仍接近 1
+    const padding = '这一层压力在全卷反复加码，且始终没有真正解除，直到卷末才出现转机'
+    const table = await readFile(join(out, tableRel), 'utf8')
+    const patched = table.split('\n').map((line) => {
+      if (!line.startsWith('| 01 ')) return line
+      const cells = line.slice(1, -1).split('|').map((c) => c.trim())
+      cells[7] = `${body}${padding}`
+      return `| ${cells.join(' | ')} |`
+    }).join('\n')
+    await writeFile(join(out, tableRel), patched, 'utf8')
+
+    const r = await validateOutput({ root: out })
+    const hit = r.errors.filter((w) => w.code === 'W_TABLE_STALE' && /核心压力源/.test(w.message))
+    assert.equal(hit.length, 1, '整段搬来再加评语仍是照抄，必须报——只看向前重合会漏掉这一类')
+  })
+})
+
+// 骨架刚建出来时，总表那一格和卷纲那一段都还是「（待填）」。
+// 两边都是占位时反向重合是 100%——若只跳过格子这一侧，一份全空的产物会被报成「照抄卷纲」。
+// 这不是理论风险：prepare 建完骨架就是这个状态，校验器会立刻对每本书报一堆假告警。
+test('C-19：总表与卷纲两边都还是占位时不报（骨架态不制造假告警）', async () => {
+  await withFilled(async (out) => {
+    const volRel = '故事底本/故事剧情/卷纲/卷01-全书.md'
+    const tableRel = '故事底本/故事剧情/分卷总表.md'
+    // 把卷纲那段也退回占位，模拟骨架态
+    const volText = await readFile(join(out, volRel), 'utf8')
+    await writeFile(join(out, volRel), volText.replace(
+      /## 主要冲突与对手\n\n[^\n]*/, '## 主要冲突与对手\n\n（待填）',
+    ), 'utf8')
+    const table = await readFile(join(out, tableRel), 'utf8')
+    const patched = table.split('\n').map((line) => {
+      if (!line.startsWith('| 01 ')) return line
+      const cells = line.slice(1, -1).split('|').map((c) => c.trim())
+      cells[7] = '（待填）'
+      return `| ${cells.join(' | ')} |`
+    }).join('\n')
+    await writeFile(join(out, tableRel), patched, 'utf8')
+
+    const r = await validateOutput({ root: out })
+    assert.deepEqual(
+      r.errors.filter((w) => w.code === 'W_TABLE_STALE').map((w) => w.message),
+      [],
+      '两边都是占位时重合度恒为 100%，必须跳过，否则每本新书都报假照抄',
+    )
+  })
+})
+
+// 占位写法会漂：手打「待填」、半角括号「(待填)」、带空格「待填 」都出现过。
+// 全等匹配只认模板那一种，漏掉的后果是「两侧都占位 → 反向重合 100% → 报成照抄」。
+test('C-19：占位判定认手写变体（待填／(待填)／带空格），不只认模板那一种写法', async () => {
+  await withFilled(async (out) => {
+    const volRel = '故事底本/故事剧情/卷纲/卷01-全书.md'
+    const tableRel = '故事底本/故事剧情/分卷总表.md'
+    for (const variant of ['待填', '(待填)', '待填 ']) {
+      const volText = await readFile(join(out, volRel), 'utf8')
+      await writeFile(join(out, volRel), volText.replace(
+        /## 主要冲突与对手\n\n[^\n]*/, `## 主要冲突与对手\n\n${variant}`,
+      ), 'utf8')
+      const table = await readFile(join(out, tableRel), 'utf8')
+      const patched = table.split('\n').map((line) => {
+        if (!line.startsWith('| 01 ')) return line
+        const cells = line.slice(1, -1).split('|').map((c) => c.trim())
+        cells[7] = variant
+        return `| ${cells.join(' | ')} |`
+      }).join('\n')
+      await writeFile(join(out, tableRel), patched, 'utf8')
+
+      const r = await validateOutput({ root: out })
+      assert.deepEqual(
+        r.errors.filter((w) => w.code === 'W_TABLE_STALE').map((w) => w.message),
+        [],
+        `占位变体「${variant}」两侧相同，不该报成照抄`,
+      )
+    }
   })
 })

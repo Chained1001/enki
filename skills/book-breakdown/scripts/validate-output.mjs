@@ -11,9 +11,10 @@ import { IoError, readManifest } from './io.mjs'
 import { pathToFileURL } from 'node:url'
 import {
   COLLECTIONS, CONTRACT_VERSION, ENUMS, QUOTE_PATTERN, QUOTE_RULE, SECTIONS, SOURCE_META_LABELS, SOURCE_PATTERN, THRESHOLDS,
-  VARIABLE_FILE_RULES, productPlan, tableColumns,
+  VARIABLE_FILE_RULES, VOL_TABLE_PAIRS, productPlan, tableColumns,
 } from './contract.mjs'
 
+const PLACEHOLDER = '（待填）'
 const USAGE = '用法：validate-output.mjs <产物目录> [--mode deliver|progress] [--json] [--help]'
 
 // ---------- 工具 ----------
@@ -54,6 +55,33 @@ function sectionBody(text, name) {
     out.push(lines[i])
   }
   return out.join('\n')
+}
+
+// 最长公共子序列长度。总表↔卷纲的重合度要用它而不是集合交集：
+// 集合会把「用词相同但说的不是一回事」也算成高重合，而 LCS 要求字按顺序对得上。
+// 长度规模是「一格 vs 一段」（几百字），一维滚动数组足够。
+function lcsLen(a, b) {
+  const x = [...a]
+  const y = [...b]
+  if (!x.length || !y.length) return 0
+  let prev = new Uint32Array(y.length + 1)
+  let cur = new Uint32Array(y.length + 1)
+  for (let i = 1; i <= x.length; i++) {
+    for (let j = 1; j <= y.length; j++) {
+      cur[j] = x[i - 1] === y[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1])
+    }
+    const t2 = prev
+    prev = cur
+    cur = t2
+    cur.fill(0)
+  }
+  return prev[y.length]
+}
+
+// 占位判定：模板写的是「（待填）」，但手写会出「待填」「(待填)」「待填 」等变体，
+// 全等匹配会漏掉这些，而漏掉的后果是「两侧都占位 → 反向重合 100% → 报成照抄」。
+function isPlaceholder(text) {
+  return typeof text === 'string' && /待填/.test(text)
 }
 
 // 第一个 Markdown 表：表头列 + 数据行。
@@ -851,6 +879,83 @@ export async function validateOutput({ root, mode = 'deliver' }) {
       // 只警告不阻断：散文是合法写法，缺章号也常见于「概括整卷走向」这类确实不落在单章的话。
       if (proseWithoutSource) {
         warn('W_PROSE_NOSRC', rel, `${proseWithoutSource} 条散文结论没写「第 N 章」出处，无法回原文核对，也不计入引句核验。示例：${noSrcSamples.join('；')}`)
+      }
+    }
+  }
+
+  // 分卷总表 ↔ 卷纲一致性（C-19）。
+  //
+  // 总表的叙述列是「从卷纲压缩来的」，但压缩和照抄在产物上长得一样。真书实测：
+  // 「一句话钩子」与卷纲同段逐字相同——说明「压缩」实为复制。更糟的是卷纲改了总表没跟上，
+  // 总表就静默过期（实测同一段弧在两个文件里写了两个章号区间）。
+  //
+  // 只用「照抄」这一个方向报警：重合高说明这一格是把卷纲整段搬过来，没有压缩。
+  //
+  // 不判「重合低＝过期」。压缩本来就该只留关键词：卷纲写「压力源是公司倒闭带来的恐惧」，
+  // 总表压成「公司」是正确写法，字面重合接近 0。拿低重合当过期会把这个工具最该鼓励的
+  // 谨慎写法全部误报——第一版就是这么写的，fixture 里四个正常列全被报了出来。
+  // 过期有别的证据可查（卷纲的弧章号区间 vs 总表起止章，已有 E_ARC_SPAN），不靠「这格和那段不像」。
+  if (mode === 'deliver') {
+    const tableRel = '故事底本/故事剧情/分卷总表.md'
+    const tableFile = actual.find((f) => f.rel === tableRel)
+    const volRelFiles = actual.filter((f) => /^故事底本\/故事剧情\/卷纲\/.+\.md$/.test(f.rel))
+    if (tableFile && volRelFiles.length) {
+      const tableText = await readFile(tableFile.full, 'utf8')
+      {
+        const tbl = firstTable(tableText)
+        if (tbl?.header?.length) {
+          const idxOf = (name) => tbl.header.findIndex((c) => c.trim() === name)
+          const volNoCol = idxOf('卷')
+          const volNameCol = idxOf('卷名')
+          // 卷号 → 该卷卷纲的正文（按文件名里的「卷NN」对）
+          const volTextByNo = new Map()
+          for (const vf of volRelFiles) {
+            const m = /卷(\d{1,2})/.exec(vf.rel.split('/').pop())
+            if (!m) continue
+            volTextByNo.set(String(Number(m[1])), await readFile(vf.full, 'utf8'))
+          }
+          for (const row of tbl.rows) {
+            const rawNo = String(row[volNoCol] ?? '').trim()
+            if (!rawNo || /^-+$/.test(rawNo)) continue
+            const no = String(Number((/(\d+)/.exec(rawNo) ?? [])[1] ?? NaN))
+            const volText = volTextByNo.get(no)
+            if (!volText) continue
+            const where = `卷${no}${volNameCol >= 0 ? `（${String(row[volNameCol] ?? '').trim()}）` : ''}`
+            for (const [tableCol, volSection] of VOL_TABLE_PAIRS) {
+              const ci = idxOf(tableCol)
+              if (ci < 0) continue
+              const cell = String(row[ci] ?? '').trim()
+              const body = sectionBody(volText, volSection)
+              if (body === null) continue // 该卷纲没这一段：段名缺失另有 E_SECTION 管，这里不重复报
+              // 任一侧还是占位就跳过比对。两侧都占位时反向重合是 100%，一份骨架会被报成
+              // 「照抄卷纲」——prepare 建完骨架正是这个状态，会立刻对每本书报一堆假告警。
+              //
+              // 合成一处判据而不是「格子一处、段一处」：分写时格子那条永远先触发，
+              // 段那条成了走不到的死代码，变异测不出它，删掉也测不出——那种保护等于没有。
+              // 用子串匹配而不是全等，是因为「待填」「(待填)」这些手写变体都会出现。
+              if (isPlaceholder(cell) || isPlaceholder(body)) continue
+              const bodyFlat = body.replace(/[\s\p{P}]/gu, '')
+              const cellFlat = cell.replace(/[\s\p{P}]/gu, '')
+              if (!bodyFlat || !cellFlat) continue
+              // 判据只有一条：**这一格把卷纲那段保留了多少**（段的字有多少按顺序出现在格里）。
+              //
+              // 两个方向都试过，都不是它：
+              //   ① 正向（格子的字有多少来自该段）对短关键词恒为 1——把段压成「公司」两字，
+              //      「公司」当然在段里，100%。于是所有写得好的压缩全被判成照抄。
+              //   ② 双向取 min 相当于要求两串长度也接近，会把「整段搬来再补几句评语」漏掉：
+              //      段 10 字、格子 43 字，min 只剩 23%，可那一段明明一个字没省。
+              //
+              // 反向单看才是对的：「没压缩」的准确含义就是「段的字基本都在」。
+              // 加了多少自己的话不影响这个判断——一个字没省下就叫没压缩。
+              // 真压缩必然丢掉大半内容，反向重合自然掉下去。
+              const ratio = lcsLen(cellFlat, bodyFlat) / bodyFlat.length
+              if (ratio >= THRESHOLDS.总表照抄重合度) {
+                warn('W_TABLE_STALE', tableRel,
+                  `${where}的「${tableCol}」把卷纲「${volSection}」整段的字保留了 ${Math.round(ratio * 100)}%，是照抄不是压缩；总表这一列等于白填`)
+              }
+            }
+          }
+        }
       }
     }
   }
