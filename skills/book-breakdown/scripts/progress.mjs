@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url'
 import { ENUMS } from './contract.mjs'
 import { IoError, readManifest, writeFileAtomic } from './io.mjs'
 
-const USAGE = '用法：progress.mjs <产物目录> [--batch-done 卷号:批号]... [--stage 阶段号:状态]... [--file 相对路径:状态]... [--resync-files] [--json] [--help]'
+const USAGE = '用法：progress.mjs <产物目录> [--batch-done 卷号:批号]... [--stage 阶段号:状态]... [--file 相对路径:状态]... [--file-state 相对路径]... [--resync-files] [--json] [--help]'
 
 export class UsageError extends Error {
   constructor(message, code = 'E_PROGRESS') { super(message); this.code = code }
@@ -37,6 +37,10 @@ export function queryProgress(manifest) {
     bookType: manifest.bookType,
     stages: manifest.stages ?? [],
     batches: { done: done.length, total: batches.length, failed: batches.filter((b) => b.status === 'failed').length },
+    // 文件状态一起给出（C-24）：流程里「回填前先看这个文件填没填」需要它。
+    // 没这个字段时，唯一的读法是让 agent 自己去翻 manifest.json——
+    // 那等于把脚本该做的事推回给模型，还多一次读。
+    files: manifest.files ?? {},
   }
 }
 
@@ -154,7 +158,7 @@ export async function resyncFileStates({ root }) {
 }
 
 export function parseArgs(argv) {
-  const options = { root: undefined, batchDone: [], stage: [], file: [], resync: false, json: false, help: false }
+  const options = { root: undefined, batchDone: [], stage: [], file: [], fileState: [], resync: false, json: false, help: false }
   let i = 0
   const valueOf = (flag) => {
     const v = argv[++i]
@@ -166,6 +170,7 @@ export function parseArgs(argv) {
     if (arg === '--batch-done') options.batchDone.push(valueOf('--batch-done'))
     else if (arg === '--stage') options.stage.push(valueOf('--stage'))
     else if (arg === '--file') options.file.push(valueOf('--file'))
+    else if (arg === '--file-state') options.fileState.push(valueOf('--file-state'))
     else if (arg === '--resync-files') options.resync = true
     else if (arg === '--json') options.json = true
     else if (arg === '--help' || arg === '-h') options.help = true
@@ -205,6 +210,11 @@ async function main() {
       console.log(`进度：${progress.book}（${progress.bookType}）`)
       console.log(`批次：${progress.batches.done}/${progress.batches.total} 完成${progress.batches.failed ? `，${progress.batches.failed} 失败` : ''}`)
       console.log(`当前阶段：${stage ? `${stage.id} ${stage.name}（${stage.status}）` : '全部完成'}`)
+      // 文件状态（C-24）：只印被问到的那些，不把几十个文件的清单刷屏。
+      for (const rel of options.fileState) {
+        const state = progress.files[rel.replace(/\\/g, '/')]
+        console.log(`${rel}：${state ?? '未登记（manifest 里没有这个路径）'}`)
+      }
     }
   } catch (error) {
     if (options.json) {
