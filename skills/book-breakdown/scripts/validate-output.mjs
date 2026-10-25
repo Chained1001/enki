@@ -753,9 +753,11 @@ export async function validateOutput({ root, mode = 'deliver' }) {
       let weak = 0
       let proseClaims = 0
       let proseQuoted = 0
+      let proseWithoutSource = 0
       let section = ''
       const samples = []
       const weakSamples = []
+      const noSrcSamples = []
       for (const line of text.split(/\r?\n/)) {
         const h = /^#{2,3}\s+(.+?)\s*$/.exec(line.trim())
         if (h) { section = h[1]; continue }
@@ -768,13 +770,28 @@ export async function validateOutput({ root, mode = 'deliver' }) {
         //      若全进分母会把覆盖率从 42% 压低到 26%，而问题并不在这些行）。
         if (!t.startsWith('-')) {
           if (!t || t.startsWith('>') || t.startsWith('|') || t.startsWith('#')) continue
-          if (!SOURCE_PATTERN.test(t)) continue
+          // 两类散文分开算，都不许静默 continue（#24）。
+          // 判据是「这一行是不是在讲本作的一句话结论」，不是「有没有写章号」——
+          // 后者正是可被规避的那个维度：写了章号会掉覆盖率，不写就满绿。
           if (QUOTE_RULE.叙述型散文.test(t)) continue
           if ([...t.replace(/[\s\p{P}]/gu, '')].length < QUOTE_RULE.散文最短结论长度) continue
           if (QUOTE_RULE.coordinateSections.includes(section)) continue
           claims += 1
           proseClaims += 1
-          if (QUOTE_PATTERN.test(t)) { quoted += 1; proseQuoted += 1 }
+          if (QUOTE_PATTERN.test(t)) {
+            quoted += 1
+            proseQuoted += 1
+          } else if (SOURCE_PATTERN.test(t)) {
+            // 带章号却没人话引句：和「-」列表行同罪，进分母且算缺
+            missing += 1
+            if (samples.length < 3) samples.push(t.slice(0, 40))
+          } else {
+            // 不带章号的散文结论：以前整行跳过，于是「把结论写成散文」能绕开分母。
+            // 现在照样进分母（已在上面 +1），并单独计数——它缺的是出处，不是引句，
+            // 所以不并进 missing（那是 E_SOURCE 的口径），由 W_PROSE_NOSRC 汇总报。
+            proseWithoutSource += 1
+            if (noSrcSamples.length < 3) noSrcSamples.push(t.slice(0, 40))
+          }
           continue
         }
         const body = t.replace(/^-\s*/, '').trim()
@@ -827,6 +844,13 @@ export async function validateOutput({ root, mode = 'deliver' }) {
         if (proseCoverage < QUOTE_RULE.minCoverage) {
           warn('W_PROSE', rel, `${proseClaims} 条散文结论中仅 ${proseQuoted} 条嵌原文引句（${Math.round(proseCoverage * 100)}%），该文件主要靠散文承载结论，抽读时优先看`)
         }
+      }
+      // #24：不带章号的散文结论。以前这类行整行 continue，既不进分母也不报任何事——
+      // 于是「把结论写成散文且不写章号」是唯一一种能让内容从账本里彻底消失的写法。
+      // 现在它进分母（所以 W_PROSE 的百分比会掉，这是预期结果），并在这里点名。
+      // 只警告不阻断：散文是合法写法，缺章号也常见于「概括整卷走向」这类确实不落在单章的话。
+      if (proseWithoutSource) {
+        warn('W_PROSE_NOSRC', rel, `${proseWithoutSource} 条散文结论没写「第 N 章」出处，无法回原文核对，也不计入引句核验。示例：${noSrcSamples.join('；')}`)
       }
     }
   }

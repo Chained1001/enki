@@ -619,7 +619,68 @@ test('W_QUOTE：散文段落里的结论也进覆盖率分母（不能靠改写�
   })
 })
 
-// ---------- v0.3.0 质量门（#11）----------
+// #24：剩下一半——不带章号的散文。上面那条只覆盖「带章号但写成散文」。
+// 不带章号的散文原先整行 continue，既不进分母也不进任何统计，
+// 于是它是唯一一种能让内容从账本里彻底消失的写法：写出章号会掉覆盖率，不写就满绿。
+test('W_PROSE_NOSRC：不带章号的散文结论也进分母，并单独点名', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/概念/事件/无源.md'
+    // 4 条散文结论，一条章号都不写，也都不带引句。
+    // 旧代码会把 4 行全部跳过：claims=0，分母归零，什么警告都不报。
+    const noSrc = [
+      '# 无源',
+      '',
+      '- 名称：无源',
+      '',
+      '两人在车站相遇，李四主动搭话，这段关系就此定下基调。',
+      '',
+      '这次相遇决定了后面所有的同行与分歧。',
+      '',
+      '王五在场但始终没有说话，他的立场到最后才揭开。',
+      '',
+      '车站此后成为反复出现的地点，每次回去都对应一次转折。',
+      '',
+    ].join('\n')
+    await writeFile(join(out, rel), noSrc, 'utf8')
+    const r = await validateOutput({ root: out })
+    const nosrc = r.errors.find((e) => e.code === 'W_PROSE_NOSRC' && e.file === rel)
+    assert.ok(nosrc, '不带章号的散文结论必须被点名，否则它是唯一的静默通道')
+    assert.match(nosrc.message, /4 条/, '消息里要写出条数，才知道有多少内容没出处')
+    assert.match(nosrc.message, /第 N 章/, '消息里要写出缺的是什么（章号出处），不然不知道该补什么')
+    // 它确实进了分母：4 条里 0 条带引句 → W_PROSE 也该报
+    assert.ok(
+      r.errors.some((e) => e.code === 'W_PROSE' && e.file === rel),
+      '不带章号的散文也必须计入散文分母，否则「覆盖率」仍可被规避',
+    )
+  })
+})
+
+// 反例：叙述型摘要不带章号仍是豁免的。
+// 这条防的是「为了修 #24 把豁免一起删掉」——真书实测幕纲里 12 条编号事件链
+// 若全进分母，覆盖率会从 42% 压到 26%，而问题并不在那些行。
+test('W_PROSE_NOSRC：叙述型摘要（编号事件链）不带章号仍然豁免', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/概念/事件/摘要体.md'
+    const summary = [
+      '# 摘要体',
+      '',
+      '- 名称：摘要体',
+      '',
+      '1. 芝加哥火车站，李四与王五碰面，约定同行。',
+      '',
+      '2. 途中遭遇伏击，两人分散又重聚。',
+      '',
+      '3. 抵达目的地，发现接应的人已经换了一个。',
+      '',
+    ].join('\n')
+    await writeFile(join(out, rel), summary, 'utf8')
+    const r = await validateOutput({ root: out })
+    assert.ok(
+      !r.errors.some((e) => e.code === 'W_PROSE_NOSRC' && e.file === rel),
+      '编号事件链是缩写不是结论，不该被要求配章号',
+    )
+  })
+})
 
 // T18b：data.errors 与 problems 必须说同一件事。
 // 原先 progress 模式在返回前 `errors.length = 0` 清计数，problems 却原样返回，
