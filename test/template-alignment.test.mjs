@@ -50,12 +50,55 @@ test('人物卡模板自己也写明「主角不用本卡」——两处口径�
 
 // ---------- 文风：偏离判定按标准差 ----------
 
-test('文风模板：偏离判定按 ≥2σ，不足 3 章标样本不足，不再固定取 top-3（A-07）', () => {
+test('文风模板：偏离判定按 ≥2σ，不足 3 章标样本不足，不再固定取 top-3（A-07）', async () => {
   const text = read('文风模板.md')
   assert.match(text, /2σ|2σ|≥2σ/, '偏离判定应以标准差为准')
   assert.ok(!/最偏离均值的三个章/.test(text), '不得再写「固定取最偏离的三个章」')
   assert.match(text, /样本不足/, '不足 3 章时应标注样本不足')
   assert.match(text, /3 章|三章/, '应写明不足 3 章的情形')
+
+  // 只查模板文字不够——A-07 当初就是「模板改了、脚本没改」。
+  // 这一半直接查脚本行为：固定 top-N 会让 3 章的书把每一章都列成偏离。
+  const { detectChapters, fingerprint } = await import('../skills/book-breakdown/scripts/prepare.mjs')
+  const mk = (bodies) => bodies.flatMap((b, i) => [`第${i + 1}章 章${i + 1}`, b, '']).join('\n')
+
+  // ① 3 章全等值：σ=0，报「一致」而不是把三章都列成偏离
+  const three = fingerprint(detectChapters(mk(['他走了。天黑了。', '他走了。天黑了。', '他走了。天黑了。'])))
+  assert.deepEqual(
+    three.deviating.句均长,
+    ['全书各章该指标一致，无偏离章'],
+    '3 章等值时 σ=0，应报「一致」；固定 top-3 会把三章全列出来',
+  )
+
+  // ①b 3 章有差异但都在 2σ 内：报「无偏离」
+  const threeDiff = fingerprint(detectChapters(mk([
+    '他走了。天黑了。',
+    '他走了。天黑了。天亮了。',
+    '他走了。天黑了。',
+  ])))
+  assert.match(
+    threeDiff.deviating.句均长.join('、'),
+    /无偏离|一致/,
+    '差距不足 2σ 时不该列出任何章，哪怕它确实是三章里最偏的',
+  )
+
+  // ② 2 章：样本不足，且写出章数
+  const two = fingerprint(detectChapters(mk(['他走了。天黑了。', '他走了。天黑了。'])))
+  assert.match(two.deviating.句均长[0], /样本不足/, '2 章算不出标准差，脚本必须自己标出来')
+  assert.match(two.deviating.句均长[0], /2 章/, '要写出实际章数，读者才知道差多少')
+
+  // ③ 真偏离：只有那一个章，且带 σ 值
+  const longSent = '他沿着那条早已被荒草盖住的旧路一直向北走去，直到再也看不见身后的城。'
+  const five = fingerprint(detectChapters(mk([
+    '他走了。天黑了。'.repeat(3),
+    '他走了。天黑了。'.repeat(3),
+    '他走了。天黑了。'.repeat(3),
+    '他走了。天黑了。'.repeat(3),
+    longSent.repeat(3),
+  ])))
+  assert.equal(five.deviating.句均长.length, 1, `只该有一章偏离，实际：${five.deviating.句均长.join('、')}`)
+  assert.match(five.deviating.句均长[0], /第5章/)
+  assert.match(five.deviating.句均长[0], /σ/, '要写出偏离几个 σ')
 })
 
 // ---------- 功能位进枚举 ----------

@@ -397,13 +397,38 @@ export function fingerprint(chapters) {
       情绪标签词密度: +(countWords(c.text, EMOTION_TAG_WORDS) / n * 10000).toFixed(1),
     }
   })
+  // 偏离判定：某章该项偏离全书均值 ≥2σ 才列出（A-07）。
+  // 不能取固定 top-N：一本全书很均匀的书，top-3 只是「相对不那么均匀」的三个，
+  // 读者看不出差别，而结论却写着「这几章偏离」——这是把噪音说成信号。
+  // 3 章以内算不出有意义的标准差，整段标「样本不足」不出结论。
+  const THRESHOLD_SIGMA = 2
+  const MIN_CHAPTERS_FOR_SIGMA = 3
   const deviating = {}
   for (const key of ['句均长', '短句比', '对话占比', '场景切换密度', '情绪标签词密度']) {
     const mean = base[key]
-    deviating[key] = [...perChapter]
-      .sort((a, b) => Math.abs(b[key] - mean) - Math.abs(a[key] - mean))
-      .slice(0, 3)
-      .map((x) => `第${x.ch}章（${x[key]}）`)
+    const vals = perChapter.map((x) => x[key])
+    if (perChapter.length < MIN_CHAPTERS_FOR_SIGMA) {
+      // 样本不足：不判偏离，把「算不出来」这件事写出来，而不是给一个假结论。
+      deviating[key] = [`样本不足（${perChapter.length} 章，不判偏离）`]
+      continue
+    }
+    const variance = vals.reduce((t, v) => t + (v - mean) ** 2, 0) / vals.length
+    const sigma = Math.sqrt(variance)
+    // σ=0（所有章等长）时任何非零偏差都是「相对」的，不构成偏离。
+    if (!(sigma > 0)) {
+      deviating[key] = ['全书各章该指标一致，无偏离章']
+      continue
+    }
+    const hits = perChapter
+      .map((x) => ({ ...x, z: Math.abs(x[key] - mean) / sigma }))
+      .filter((x) => x.z >= THRESHOLD_SIGMA)
+      .sort((a, b) => b.z - a.z)
+    // 上限只为防刷屏（长书真可能几十章偏离），按 z 值从大到小取前 5，
+    // 并在文本里写明「另有 N 章」——不静默截断。
+    const LIMIT = 5
+    const shown = hits.slice(0, LIMIT).map((x) => `第${x.ch}章（${x[key]}，${x.z.toFixed(1)}σ）`)
+    if (hits.length > LIMIT) shown.push(`另有 ${hits.length - LIMIT} 章同样偏离，未列出`)
+    deviating[key] = shown.length ? shown : ['无偏离章（均在 2σ 以内）']
   }
   return { base, deviating, hasQuote: quoted.length > 0 }
 }

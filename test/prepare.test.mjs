@@ -604,7 +604,40 @@ test('指纹扩容计数：场景切换只认行首标记、情绪标签词全�
   assert.equal(fp.base.场景切换密度, +(3 / 35 * 10000).toFixed(1))
   assert.equal(fp.base.情绪标签词密度, +(1 / 35 * 10000).toFixed(1))
   assert.deepEqual(Object.keys(fp.base), ['句均长', '短句比', '对话占比', '了密度', '疲劳词密度', '场景切换密度', '情绪标签词密度'], 'base 七项')
-  assert.ok(fp.deviating.场景切换密度.length === 3 && fp.deviating.情绪标签词密度.length === 3, '新增两项各有偏离章 top3')
+  // A-07：3 章是最小可算样本（模板口径「样本不足 3 章」），所以这里算出「无偏离章」，
+  // 而不是固定取三个「相对最偏离」的章。原先这条断言的是 length === 3——
+  // 3 章样本下 top-3 就是全部三章，等于把每一章都标成偏离。
+  assert.deepEqual(fp.deviating.场景切换密度, ['无偏离章（均在 2σ 以内）'], '3 章算出的是「无偏离」，不是全部三章')
+  assert.deepEqual(fp.deviating.情绪标签词密度, ['无偏离章（均在 2σ 以内）'], '两项都该同样处理，不能只改一项')
+})
+
+// A-07 的核心：不满 3 章时不出偏离结论。
+test('指纹偏离判定：不足 3 章标样本不足，不编偏离章（A-07）', () => {
+  const text = ['第一章 一', '次日，张三启程。', '', '第二章 二', '清晨，李四赶到。', ''].join('\n')
+  const fp = fingerprint(detectChapters(text))
+  assert.match(fp.deviating.句均长[0], /样本不足/, '2 章算不出标准差，必须写明而不是给结论')
+  assert.match(fp.deviating.句均长[0], /2 章/, '要把实际章数写出来，否则读者不知道差多少')
+})
+
+// A-07 的另一半：真偏离才列，且标出 σ 值。
+// 造一本 5 章的书，前四章全是短句、第 5 章全是长句，应只有第 5 章被列出。
+test('指纹偏离判定：只列真正 ≥2σ 的章，并写出 σ 值（A-07）', () => {
+  // 句均长不受「写多少字」影响，只受句子长短影响——所以要用句长造差异，
+  // 不能靠重复短句把第五章堆长（那样句均长不变，造不出偏离）。
+  const short = '他走了。天黑了。'
+  const long = '他沿着那条早已被荒草盖住的旧路一直向北走去，直到再也看不见身后的城。'
+  const text = [
+    '第一章 一', short.repeat(3), '',
+    '第二章 二', short.repeat(3), '',
+    '第三章 三', short.repeat(3), '',
+    '第四章 四', short.repeat(3), '',
+    '第五章 五', long.repeat(3), '',
+  ].join('\n')
+  const fp = fingerprint(detectChapters(text))
+  const shown = fp.deviating.句均长
+  assert.equal(shown.length, 1, `只该有第 5 章偏离，实际：${shown.join('、')}`)
+  assert.match(shown[0], /第5章/, '偏离的是那个真正超长的章')
+  assert.match(shown[0], /σ/, '要写出偏离多少个 σ，否则读者无法判断偏离有多强')
 })
 
 test('prepare 返回批数＝manifest 批数（「规模预告」行的数据源，A-5 前置单测）', async () => {
