@@ -86,8 +86,21 @@ export function splitTopLevel(s) {
   return out.map((x) => x.trim()).filter((x) => x && x !== PLACEHOLDER)
 }
 
-// 纯函数：给定表行，返回 { 实体名 → {类型, 章号[], 首现章, 末次章} }
-export function buildIndex(lines) {
+// 纯函数：给定表行，返回 { 实体名 → {类型, 章号[], 首现章, 末次章, 分卷章数, 视角章[]} }
+//
+// 分卷章数与视角章是本轮补的（C-29）：08 的主次判定要「全局＋分卷双口径出场」与
+// 「视角章占比」，而脚本此前只给全局。缺这两项时，08 的原文只能让 agent 自己数——
+// 数同一件事实在两个人手里就会有两个结果，且数错了产物上看不出来。
+//
+// 分卷归属按 manifest 的卷区间算（chapters[].no 落在 [startCh, endCh]）。
+// volumes 不传时退化成「整本当一卷」，与 volume-stats 的口径一致。
+export function buildIndex(lines, opts = {}) {
+  const volumes = opts.volumes ?? []
+  const volOf = (no) => {
+    if (!volumes.length) return 1
+    const v = volumes.find((x) => no >= x.startCh && no <= x.endCh)
+    return v ? v.no : 0 // 0 = 落在所有卷区间之外（切卷与切章不一致）
+  }
   const cols = tableColumns('逐章记录')
   const iNo = cols.indexOf('全局章号')
   const iPov = cols.indexOf('视角人物')
@@ -98,6 +111,7 @@ export function buildIndex(lines) {
   let headerSeen = false
   let chapters = 0
   let pending = 0
+  const chapterNos = []
 
   for (const line of lines) {
     const cells = parseRow(line)
@@ -110,6 +124,7 @@ export function buildIndex(lines) {
     const no = Number(cells[iNo])
     if (!Number.isFinite(no)) continue
     chapters += 1
+    chapterNos.push(no)
 
     // 该行是否已填（未填的行不参与索引，避免把「（待填）」当实体）
     const filled = [cells[iPov], cells[iPlace], cells[iCast]].some(
@@ -124,21 +139,40 @@ export function buildIndex(lines) {
       if (!name || name === PLACEHOLDER) return
       let e = index.get(name)
       if (!e) {
-        e = { 名称: name, 类型: type, 章号: [], 首现章: no, 末次章: no }
+        e = { 名称: name, 类型: type, 章号: [], 首现章: no, 末次章: no, 分卷章数: {}, 视角章: [] }
         index.set(name, e)
       }
       if (!e.章号.includes(no)) e.章号.push(no)
+      const v = volOf(no)
+      // 分卷计数只在首次遇到该章时加。同名实体可能同时出现在「视角人物」与
+      // 「出场人物」两格，不去重会把同一章算两遍，占比就超过 100%。
+      if (!e.__seen) e.__seen = new Set()
+      if (!e.__seen.has(no)) { e.__seen.add(no); e.分卷章数[v] = (e.分卷章数[v] ?? 0) + 1 }
       if (no < e.首现章) e.首现章 = no
       if (no > e.末次章) e.末次章 = no
     }
 
-    for (const n of splitEntities(cells[iPov])) add(n, '人物')
+    // 视角人物单独记：主次判定要看「这个人是视角人物的章数占比」，
+    // 它和「出场章数」不是一回事——出场可能是被别人看见，视角是他在看。
+    for (const n of splitEntities(cells[iPov])) {
+      add(n, '人物')
+      const e = index.get(n)
+      if (e && !e.视角章.includes(no)) e.视角章.push(no)
+    }
     for (const n of splitEntities(cells[iPlace])) add(n, '地点')
     for (const n of splitEntities(cells[iCast])) add(n, '人物')
   }
 
-  for (const e of index.values()) e.章号.sort((a, b) => a - b)
-  return { index, chapters, pending, headerSeen }
+  for (const e of index.values()) {
+    e.章号.sort((a, b) => a - b)
+    e.视角章.sort((a, b) => a - b)
+    delete e.__seen // 内部去重集合不进输出（JSON 里出现 Set 会变成 {}，看着像数据其实不是）
+  }
+  // 每卷的章数：分卷占比的分母。用实际读到的章数而不是卷区间长度——
+  // 卷区间是切卷脚本给的，实际写了记录的可能少几章（中断续跑时常见）。
+  const volChapters = {}
+  for (const no of chapterNos) volChapters[volOf(no)] = (volChapters[volOf(no)] ?? 0) + 1
+  return { index, chapters, pending, headerSeen, volChapters }
 }
 
 // 采样建议：给一个实体的章号，挑出最值得读原文的几章（首现/末次/中段/高光）。
@@ -211,7 +245,14 @@ async function main() {
     process.exit(1)
   }
 
-  const { index, chapters, pending, headerSeen } = buildIndex(raw.split(/\r?\n/))
+  // 卷区间来自 manifest（切卷时写好的），不再让 08 自己按章号推分卷边界。
+  let volumes = []
+  try {
+    const m = JSON.parse(await readFile(join(args.dir, '工作', 'manifest.json'), 'utf8'))
+    volumes = (m.volumes ?? []).map((v) => ({ no: v.no, startCh: v.startCh, endCh: v.endCh }))
+  } catch { /* 没有 manifest 时退化成整本一卷，与 volume-stats 一致 */ }
+
+  const { index, chapters, pending, headerSeen, volChapters } = buildIndex(raw.split(/\r?\n/), { volumes })
   if (!headerSeen) {
     console.error('未找到逐章记录表头（须与 contract 的列名逐字一致）')
     process.exit(1)
@@ -231,6 +272,14 @@ async function main() {
       process.exit(1)
     }
     console.log(`${e.名称}（${e.类型}）：出现 ${e.章号.length} 章，首现第 ${e.首现章} 章，末次第 ${e.末次章} 章`)
+    // 视角章与分卷口径一起给（C-29）：主次判定要「全局＋分卷」两个口径，
+    // 缺了分卷那一半，08 就只能自己按章号数——同一件事实两个人数出两个值。
+    const povN = e.视角章.length
+    console.log(`视角人物章：${povN} 章（占出场 ${(povN / e.章号.length * 100).toFixed(1)}%）`)
+    const volParts = Object.entries(e.分卷章数)
+      .sort((a, b) => Number(a[0]) - Number(b[0]))
+      .map(([v, c]) => `第${v}卷 ${c}/${volChapters[v] ?? '?'} 章（${((c / (volChapters[v] || 1)) * 100).toFixed(1)}%）`)
+    if (volParts.length) console.log(`分卷出场：${volParts.join('；')}`)
     console.log(`全部出场章：${e.章号.join(', ')}`)
     console.log(`建议取证章（≤${args.sample} 章，够建卡）：${sampleChapters(e.章号, args.sample).join(', ')}`)
     return
@@ -239,10 +288,10 @@ async function main() {
   if (args.list) {
     console.log(`实体 ${all.length} 个（已填 ${chapters - pending} 章 / 共 ${chapters} 章；未填 ${pending} 章不参与索引）`)
     console.log('')
-    console.log('| 实体 | 类型 | 出现章数 | 首现章 | 末次章 |')
-    console.log('|---|---|---|---|---|')
+    console.log('| 实体 | 类型 | 出现章数 | 视角章数 | 首现章 | 末次章 |')
+    console.log('|---|---|---|---|---|---|')
     for (const e of all.slice(0, args.top)) {
-      console.log(`| ${e.名称} | ${e.类型} | ${e.章号.length} | ${e.首现章} | ${e.末次章} |`)
+      console.log(`| ${e.名称} | ${e.类型} | ${e.章号.length} | ${e.视角章.length} | ${e.首现章} | ${e.末次章} |`)
     }
     if (all.length > args.top) console.log(`\n（只显示前 ${args.top} 个，用 --top N 调整）`)
     return
@@ -254,7 +303,12 @@ async function main() {
       未填章数: pending,
       实体数: index.size,
       采样上限: args.sample,
-    实体: all.map((e) => ({ ...e, 建议取证章: sampleChapters(e.章号, args.sample) })),
+      分卷章数: volChapters,
+      实体: all.map((e) => ({
+        ...e,
+        视角章占比: e.章号.length ? Number((e.视角章.length / e.章号.length).toFixed(4)) : 0,
+        建议取证章: sampleChapters(e.章号, args.sample),
+      })),
     }
     const text = JSON.stringify(payload, null, 1)
     if (args.out) {

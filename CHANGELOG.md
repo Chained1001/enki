@@ -37,6 +37,8 @@
 - `progress --file-state` 只读打印单个文件状态（#35）：`prepare` 把骨架记成 `skeleton` 后再无地方改它，`--file` 虽已实现但 06/07 从未调用。现 06 标 `全书大纲.md:filled`、07 标幕纲与卷纲，回填装置段前先用 `--file-state` 读状态；`queryProgress` 返回加 `files`
 - 新增 `reconcile.mjs`（#36）：快速模式对账由脚本打印五项并给退出码（0 全对／1 对不上／2 参数错），不再手算。按 C-28 增收「摘要超 60 字行数」与「无法摘要行数」两行；报告未落盘时报 `E_FILE`，不退回手算
 - 新增 `progress --repair-round 轮次:说明`（C-15）：修复轮次写进 `manifest.repairs`，`queryProgress` 一并返回。此前轮次只活在对话里，中断重跑就从头数，10 的「三轮上限」等于不存在
+- 新增 `quote-finder --grep-all`（C-14）：一批引句一次定位，给候选章号与候选句，出处核验子代理不必自己逐条检索（绍宋实测 120 条 ≈ 6 小时的检索部分降为一遍扫全书）
+- `entity-index` 增产分卷出场章数、视角章与 `volChapters`（C-29）：`--json` 每条实体带 `视角章占比`，08 的主次判定不再需要 agent 手算
 
 ### Changed
 
