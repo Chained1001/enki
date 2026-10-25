@@ -128,6 +128,31 @@ test('枚举外的取值不计入统计，但要报出来（静默丢弃等于�
   assert.match(rep, /爽点强度：第2章「大爽点」/, '爽点强度那一类同理')
 })
 
+test('占位按字段判：钩型还是占位、爽点已填的章仍然参与密度（C-03 回归）', () => {
+  // 原实现是 `hook === 占位 || sharp === 占位 → 整行跳过`。
+  // agent 逐列填的时候，「爽点强度填了、章末钩型还没填」是常态，
+  // 于是那一章被整行丢掉，密度分母漏算，而产物上看不出少了。
+  const rows = [row(1, '（待填）', '大'), row(2, '（待填）', '无')]
+  const r = computeVolumeStats(rows, { volumes: [{ no: 1, name: '卷', startCh: 1, endCh: 2 }] })
+  assert.equal(r.perVolume[0].chapters, 2, '两章都要进分母')
+  assert.equal(r.perVolume[0].sharpDensity, 0.5, '1/2 有爽点')
+  assert.equal(r.offEnum.钩型.length, 0, '占位不算非法取值')
+})
+
+test('占位按字段判：爽点还是占位、钩型已填的章也参与钩型统计', () => {
+  const rows = [row(1, '危机', '（待填）'), row(2, '悬念', '（待填）')]
+  const r = computeVolumeStats(rows, { volumes: [{ no: 1, name: '卷', startCh: 1, endCh: 2 }] })
+  assert.equal(r.perVolume[0].chapters, 2)
+  assert.equal(r.perVolume[0].hookDist.length, 2, '两种钩型都要统计到')
+  assert.equal(r.perVolume[0].sharpDensity, 0, '两章都没爽点 → 0，不是 null（分母存在）')
+})
+
+test('占位按字段判：三列全空才整行跳过（还没开始填的行）', () => {
+  const rows = [row(1, '（待填）', '（待填）'), row(2, '危机', '大')]
+  const r = computeVolumeStats(rows, { volumes: [{ no: 1, name: '卷', startCh: 1, endCh: 2 }] })
+  assert.equal(r.perVolume[0].chapters, 1, '全空的第 1 行不进统计')
+})
+
 test('占位行整行跳过：既不进统计也不报成非法取值', () => {
   // 骨架态每行都是（待填）。若把（待填）当非法取值报出来，新建的书一跑就是满屏错误。
   const rows = [row(1, '（待填）', '（待填）'), row(2, '危机', '大')]

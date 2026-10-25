@@ -6,6 +6,7 @@ import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cnToInt, detectChapters, detectVolumes, fingerprint, prepare } from '../skills/book-breakdown/scripts/prepare.mjs'
+import { COLUMNS } from '../skills/book-breakdown/scripts/contract.mjs'
 
 const SAMPLE = `前言部分，交代背景。
 
@@ -565,7 +566,7 @@ test('合成书骨架：总表 15 列表头、大纲含「## 故事设计」且�
     const table = readFileSync(join(r.outDir, '故事底本', '故事剧情', '分卷总表.md'), 'utf8')
     const header = table.split(/\r?\n/).find((l) => l.startsWith('| 卷 |'))
     assert.ok(header, '分卷总表应含表头行')
-    assert.equal(header.slice(1, -1).split('|').length, 15, '分卷总表 15 列')
+    assert.equal(header.slice(1, -1).split('|').length, COLUMNS['分卷总表'].length, '分卷总表列数与契约一致')
     // 大纲四块，第一块故事设计七项引导
     const outline = readFileSync(join(r.outDir, '故事底本', '故事剧情', '全书大纲.md'), 'utf8')
     assert.ok(outline.includes('## 故事设计'), '全书大纲骨架应含「## 故事设计」')

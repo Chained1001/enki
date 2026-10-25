@@ -122,7 +122,13 @@ export function peakIntensityOf(toneText) {
   if (!raw || raw.includes('待填')) return null
   const val = raw.replace(/[（(]\s*$/, '')
   if (!val || /^无/.test(val)) return null
-  return { value: val, ok: ENUMS.峰值强度.some((e) => val.includes(e)) }
+  // 合法写法只有两种：整词（「燃」）或「枚举词＋括注」（「燃（对抗升级）」「喜/关系缓和」）。
+  // 判据是「枚举词之后要么结束、要么紧接着一个分隔符」：
+  // 用 includes 会放过「喜悦」「大爽点」；用 startsWith 会放过「喜悦」——两种都宁可放过，
+  // 而这里要的是「写了别的词就报」，因为逐章记录的同名列是用 E_ENUM 严格拒的。
+  const SEP = '（(／/、,，·—－-'
+  const ok = ENUMS.峰值强度.some((e) => val === e || (val.startsWith(e) && SEP.includes(val[e.length])))
+  return { value: val, ok }
 }
 
 export function parseRow(line) {

@@ -200,8 +200,8 @@ async function makeFilledProduct() {
   // 总表的叙述列是卷纲的**压缩**，不是照抄（C-19 会把逐字重合报出来）。
   // 夹具要体现这个关系：卷纲段里是同段的全句，总表这格只留关键词。
   await writeRel('故事底本/故事剧情/分卷总表.md', tableFile('分卷总表', '分卷总表', [
-    // 十五列跟进（Q-23/Q-24 跟进）：本卷主要对手/追读钩入列，商业外证写「无」＝无数据。
-    ['01', '全书', '书名', '1-5', '5', '100/20', '相遇钩', '关系困局', '李四', '成长', '车站', '悬念钩', '下一卷悬念', '三天', '无'],
+    // 十六列（C-03）：爽点密度插在「字数与均章长」之后，由 volume-stats --write-total 写；本卷主要对手/追读钩入列，商业外证写「无」＝无数据。
+    ['01', '全书', '书名', '1-5', '5', '100/20', '40.0', '相遇钩', '关系困局', '李四', '成长', '车站', '悬念钩', '下一卷悬念', '三天', '无'],
   ]))
 
   // 同步 manifest.files 的状态（B-06）：prepare 写下的是 skeleton，上面这一段已经把内容填好了。
@@ -1052,6 +1052,12 @@ test('C-09：增量目录的命名规则是收紧的，不是整个 工作/ 放�
 
 // ---------- C-19：分卷总表照抄卷纲 ----------
 //
+// 列下标一律按列名查，不写数字：C-03 插入「爽点密度」后，原来的 cells[7] 从
+// 「核心压力源」变成了「爽点密度」，于是下面几个用例全都在改错的格子——
+// 它们仍然是绿的（没报错），但测的已经不是照抄。数字下标会在插列时静默失效。
+const colIdx = (name) => tableColumns('分卷总表').indexOf(name)
+
+//
 // 总表的叙述列是「从卷纲压缩来的」，但压缩和照抄在产物上长得一样。
 // 真书实测「一句话钩子」与卷纲同段逐字相同——说明「压缩」实为复制，这一列等于白填。
 //
@@ -1071,7 +1077,7 @@ test('C-19：总表叙述列逐字照抄卷纲时报 W_TABLE_STALE', async () =>
     const patched = table.split('\n').map((line) => {
       if (!line.startsWith('| 01 ')) return line
       const cells = line.slice(1, -1).split('|').map((c) => c.trim())
-      cells[7] = body // 核心压力源（第 8 列）
+      cells[colIdx('核心压力源')] = body
       return `| ${cells.join(' | ')} |`
     }).join('\n')
     await writeFile(join(out, tableRel), patched, 'utf8')
@@ -1092,8 +1098,8 @@ test('C-19：总表只留关键词（真压缩）时不报——压缩本来就�
     const patched = table.split('\n').map((line) => {
       if (!line.startsWith('| 01 ')) return line
       const cells = line.slice(1, -1).split('|').map((c) => c.trim())
-      cells[7] = '公司' // 卷纲那段是「卷纲·主要冲突与对手」，这里只留关键词
-      cells[11] = '悬念' // 卷纲那段是「卷纲·卷末收束与悬念定格」
+      cells[colIdx('核心压力源')] = '公司' // 卷纲那段是「卷纲·主要冲突与对手」，这里只留关键词
+      cells[colIdx('卷末状态（悬念定格方式）')] = '悬念' // 卷纲那段是「卷纲·卷末收束与悬念定格」
       return `| ${cells.join(' | ')} |`
     }).join('\n')
     await writeFile(join(out, tableRel), patched, 'utf8')
@@ -1111,7 +1117,7 @@ test('C-19：总表未填（还有占位）时不参与比对，不制造噪音'
     const patched = table.split('\n').map((line) => {
       if (!line.startsWith('| 01 ')) return line
       const cells = line.slice(1, -1).split('|').map((c) => c.trim())
-      cells[7] = '（待填）'
+      cells[colIdx('核心压力源')] = '（待填）'
       return `| ${cells.join(' | ')} |`
     }).join('\n')
     await writeFile(join(out, tableRel), patched, 'utf8')
@@ -1136,7 +1142,7 @@ test('C-19：整段搬来又加评语时仍算照抄（正向会被稀释，反�
     const patched = table.split('\n').map((line) => {
       if (!line.startsWith('| 01 ')) return line
       const cells = line.slice(1, -1).split('|').map((c) => c.trim())
-      cells[7] = `${body}${padding}`
+      cells[colIdx('核心压力源')] = `${body}${padding}`
       return `| ${cells.join(' | ')} |`
     }).join('\n')
     await writeFile(join(out, tableRel), patched, 'utf8')
@@ -1163,7 +1169,7 @@ test('C-19：总表与卷纲两边都还是占位时不报（骨架态不制造�
     const patched = table.split('\n').map((line) => {
       if (!line.startsWith('| 01 ')) return line
       const cells = line.slice(1, -1).split('|').map((c) => c.trim())
-      cells[7] = '（待填）'
+      cells[colIdx('核心压力源')] = '（待填）'
       return `| ${cells.join(' | ')} |`
     }).join('\n')
     await writeFile(join(out, tableRel), patched, 'utf8')
@@ -1192,7 +1198,7 @@ test('C-19：占位判定认手写变体（待填／(待填)／带空格），�
       const patched = table.split('\n').map((line) => {
         if (!line.startsWith('| 01 ')) return line
         const cells = line.slice(1, -1).split('|').map((c) => c.trim())
-        cells[7] = variant
+        cells[colIdx('核心压力源')] = variant
         return `| ${cells.join(' | ')} |`
       }).join('\n')
       await writeFile(join(out, tableRel), patched, 'utf8')

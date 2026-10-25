@@ -14,7 +14,7 @@
 //      卷末本来就该和卷首钩型相同（都是悬念），那是结构不是拖。
 //   ③ 中位数用在「中爽点之间的间隔」上而不是均值：间隔分布长尾（连着几章无爽点、
 //      然后一章大爽点）会把均值拉得没有代表性。偶数个间隔取中间两个的均值。
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { ENUMS, tableColumns } from './contract.mjs'
@@ -23,6 +23,12 @@ import { parseRow } from './validate-output.mjs'
 const PLACEHOLDER = '（待填）'
 // 「有爽点」的定义：强度不是「无」。小／中／大都算一次爽点投放。
 const NO_SHARP = '无'
+
+// 密度转百分比字符串。分卷总表那一列与 humanReport 共用，避免两处各留几位小数。
+export function pct(ratio) {
+  if (ratio === null || ratio === undefined) return ''
+  return (ratio * 100).toFixed(1)
+}
 
 function median(nums) {
   if (!nums.length) return null
@@ -45,12 +51,21 @@ export function computeVolumeStats(rows, { volumes = [] } = {}) {
   for (const cells of rows) {
     const no = Number(cells[iNo])
     if (!Number.isFinite(no)) continue
-    const hook = String(cells[iHook] ?? '').trim()
-    const sharp = String(cells[iSharp] ?? '').trim()
-    const sharpType = String(cells[iSharpType] ?? '').trim()
-    // 占位行整行跳过：还没填的行不该参与任何统计，也不该被报成「非法取值」。
-    if (hook === PLACEHOLDER || sharp === PLACEHOLDER) continue
-    if (!hook && !sharp) continue
+    // 占位符按**字段**判，不按行判（C-03 修）。
+    //
+    // 原来是 `if (hook === PLACEHOLDER || sharp === PLACEHOLDER) continue`——任意一列还是占位
+    // 就把整行丢掉。但 agent 是逐列填的：很可能爽点强度填了、章末钩型还没填，
+    // 那一章就被整行跳过，于是**密度分母漏算这一章**，而产物上看不出少了。
+    // 现在每列各自把占位当空：占位不算非法取值，也不阻止这一章参与别的列的统计。
+    const raw = (name) => {
+      const v = String(cells[name] ?? '').trim()
+      return v === PLACEHOLDER || v.includes('待填') ? '' : v
+    }
+    const hook = raw(iHook)
+    const sharp = raw(iSharp)
+    const sharpType = raw(iSharpType)
+    // 三列都空才是「这一行还没开始填」，整行跳过。
+    if (!hook && !sharp && !sharpType) continue
 
     // 不在枚举内的值不算数，但要记下来报给用户——静默丢弃等于把数据问题藏起来。
     if (hook && !ENUMS.钩型.includes(hook)) offEnum.钩型.push({ no, value: hook })
@@ -108,11 +123,22 @@ export function computeVolumeStats(rows, { volumes = [] } = {}) {
     const typeCount = new Map()
     for (const c of inVol) if (c.sharpType) typeCount.set(c.sharpType, (typeCount.get(c.sharpType) ?? 0) + 1)
 
+    // 爽点密度（C-03）：卷内爽点章数 ÷ 本卷章数。
+    //
+    // 单独存成字段而不只在 humanReport 里加工：分卷总表的「爽点密度」列要能由
+    // `--write-total` 直接写入，而字符串「15.0%」写不进表——表里要的也是这个数，
+    // 两处各算一次就会漂。这里算一次，报告与总表都用它。
+    //
+    // 算不出时给 null 不给 0：0% 表示「这一卷一个爽点都没有」，null 表示
+    // 「逐章记录还是骨架，根本没数可算」。两者在产物上必须能分开。
+    const sharpDensity = inVol.length ? sharpChs.length / inVol.length : null
+
     return {
       no: span.no,
       name: span.name,
       chapters: inVol.length,
       sharpChapters: sharpChs.length,
+      sharpDensity,
       sharpGapMedian: median(gaps),
       sharpGaps: gaps.length,
       hookDist,
@@ -127,6 +153,56 @@ export function computeVolumeStats(rows, { volumes = [] } = {}) {
   return { perVolume, offEnum, total: chapters.length }
 }
 
+// 把每卷的爽点密度写回分卷总表（C-03）。
+//
+// 为什么要有写入器，而不是让 09 的 agent 手抄：密度是纯反转（两个数相除），
+// 手抄与脚本算出两个值时，产物上没有任何东西能说明哪个对。而这一列的作用正是
+// 「这一卷节奏闷不闷」——它错了整张表的判断都跟着错。
+//
+// 三条口径：
+//   ① 逐章记录还是骨架的卷写「（待填）」，不写 0%：0% 是「这一卷一个爽点都没有」，
+//      与「还没数」是两件事，混在一起就没人敢信这一列。
+//   ② 只改「爽点密度」这一格，其余列原样保留——agent 可能已经填了叙述列，
+//      整行重写会把那些内容抹掉。
+//   ③ 表里没有的卷（逐章记录有、manifest 卷区间没有）不新增行：总表一行一卷，
+//      行由 09 建，脚本只填格。
+export function writeTotalTable(tableText, stats, { placeholder = '（待填）' } = {}) {
+  const cols = tableColumns('分卷总表')
+  const iVol = cols.indexOf('卷')
+  const iDensity = cols.indexOf('爽点密度')
+  if (iVol < 0 || iDensity < 0) throw new Error('E_CONTRACT：分卷总表缺「卷」或「爽点密度」列')
+
+  const byVol = new Map(stats.perVolume.map((v) => [String(v.no), v]))
+  const lines = tableText.split(/\r?\n/)
+  let headerSeen = false
+  let changed = 0
+  const out = lines.map((line) => {
+    const cells = parseRow(line)
+    if (!cells) return line
+    if (!headerSeen) {
+      // 表头判据与 write-rows 同法：逐字等于契约列名
+      if (cells.length === cols.length && cells.every((c, k) => c === cols[k])) headerSeen = true
+      return line
+    }
+    if (cells.length !== cols.length) return line
+    if (/^[-: ]+$/.test(cells[0])) return line
+
+    // 总表的「卷」列可能是 1 也可能是 01，两种都认
+    const volNo = String(Number(cells[iVol]))
+    const v = byVol.get(volNo)
+    if (!v) return line
+
+    const next = v.sharpDensity === null ? placeholder : pct(v.sharpDensity)
+    if (cells[iDensity] === next) return line
+    const patched = [...cells]
+    patched[iDensity] = next
+    changed += 1
+    return '| ' + patched.join(' | ') + ' |'
+  })
+
+  return { text: out.join('\n'), changed, headerSeen }
+}
+
 // 人读报告。刻意把「算不出来」写成明确的一句话，而不是留空或写 0——
 // 0 与「没算」是两件事，混在一起就没人知道该不该信这个数。
 export function humanReport(stats) {
@@ -136,8 +212,7 @@ export function humanReport(stats) {
     if (!v.sharpChapters) {
       lines.push('  爽点：本卷没有记到爽点章（强度全为「无」或未填）')
     } else {
-      const density = v.chapters ? ((v.sharpChapters / v.chapters) * 100).toFixed(1) : '0.0'
-      lines.push(`  爽点密度：${density}%（${v.sharpChapters}/${v.chapters}）`)
+      lines.push(`  爽点密度：${pct(v.sharpDensity)}%（${v.sharpChapters}/${v.chapters}）`)
       lines.push(v.sharpGapMedian === null
         ? '  中爽点间隔中位数：无（本卷只记到 1 个爽点章，算不出间隔）'
         : `  中爽点间隔中位数：${v.sharpGapMedian} 章（共 ${v.sharpGaps} 个间隔）`)
@@ -169,12 +244,14 @@ export function humanReport(stats) {
 // ---------- CLI ----------
 
 function parseArgs(argv) {
-  const out = { dir: null, json: false, help: false }
+  const out = { dir: null, json: false, help: false, writeTotal: false, dryRun: false }
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i]
     if (a === '--json') out.json = true
+    else if (a === '--write-total') out.writeTotal = true
+    else if (a === '--dry-run') out.dryRun = true
     else if (a === '--help' || a === '-h') out.help = true
-    else if (a.startsWith('-')) throw new Error(`未知参数「${a}」。用法：volume-stats.mjs <产物目录> [--json]`)
+    else if (a.startsWith('-')) throw new Error(`未知参数「${a}」。用法：volume-stats.mjs <产物目录> [--json] [--write-total [--dry-run]]`)
     else if (out.dir === null) out.dir = a
     else throw new Error(`多余的参数「${a}」。只接受一个产物目录`)
   }
@@ -185,8 +262,10 @@ function parseArgs(argv) {
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (args.help) {
-    console.log('用法：volume-stats.mjs <产物目录> [--json]')
-    console.log('从 工作/逐章记录.md 算卷级派生统计：爽点章数与间隔中位数、钩型分布、最大连续同型钩。')
+    console.log('用法：volume-stats.mjs <产物目录> [--json] [--write-total [--dry-run]]')
+    console.log('从 工作/逐章记录.md 算卷级派生统计：爽点章数与密度、间隔中位数、钩型分布、最大连续同型钩。')
+    console.log('--write-total：把每卷的爽点密度写回「故事底本/故事剧情/分卷总表.md」对应行（只改这一格）。')
+    console.log('--dry-run：配合 --write-total，只报告会改几处，不落盘。')
     return
   }
 
@@ -225,6 +304,41 @@ async function main() {
   } catch { /* 没有 manifest 不阻断：整本当一卷仍能出数 */ }
 
   const stats = computeVolumeStats(rows, { volumes })
+
+  if (args.writeTotal) {
+    const totalPath = join(args.dir, '故事底本', '故事剧情', '分卷总表.md')
+    let tableText
+    try {
+      tableText = await readFile(totalPath, 'utf8')
+    } catch {
+      console.error(`E_FILE：读不到「${totalPath}」。先跑 prepare 生成骨架。`)
+      process.exit(1)
+    }
+    let result
+    try {
+      result = writeTotalTable(tableText, stats)
+    } catch (error) {
+      console.error(error.message)
+      process.exit(2)
+    }
+    if (!result.headerSeen) {
+      console.error('E_HEADER：分卷总表里没找到与契约逐字一致的表头，不猜列序（猜错会把密度写进别的列）。')
+      process.exit(1)
+    }
+    if (args.dryRun) {
+      console.log(`会改 ${result.changed} 处（--dry-run，未落盘）`)
+      return
+    }
+    // 内容没变时不写：避免把一个没改动的文件记成刚改过（mtime 会变，产物上分不出「改过」与「跑过」）。
+    if (result.changed === 0) {
+      console.log('爽点密度列已是最新，无需改动')
+      return
+    }
+    await writeFile(totalPath, result.text, 'utf8')
+    console.log(`已写入 ${result.changed} 处爽点密度（${totalPath}）`)
+    return
+  }
+
   if (args.json) console.log(JSON.stringify(stats, null, 2))
   else console.log(humanReport(stats))
 }
