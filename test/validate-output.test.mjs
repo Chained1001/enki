@@ -1,12 +1,13 @@
 // 防的漂移：validate-output.mjs 的校验项与 PRD 验收标准（A-04~A-22 可脚本部分）脱节。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { prepare } from '../skills/book-breakdown/scripts/prepare.mjs'
-import { findLineGaps, validateOutput } from '../skills/book-breakdown/scripts/validate-output.mjs'
+import { CARD_FIELDS, findLineGaps, validateOutput } from '../skills/book-breakdown/scripts/validate-output.mjs'
 import { SECTIONS, tableColumns } from '../skills/book-breakdown/scripts/contract.mjs'
 
 const NOVEL = [
@@ -124,7 +125,7 @@ async function makeFilledProduct() {
     ['首次出场章', '第1章'], ['关键章节链', v('第1章相遇')], ['核心关系', v('张三的挚友')],
     ['说话风格与人设锚点', v('笑着说话')], ['体貌锚点', v('瘦高')], ['衣着与装束', v('青衫')],
     ['神态与动作锚', v('摸鼻子')], ['外在目标（要什么）', v('求道')], ['内在缺口（缺什么）', v('怕被抛下')],
-    ['致命弱点（会毁在哪）', v('心软')], ['原型词/功能位', '挚友'], ['结局状态与死亡/退场章', '在世（未完）'],
+    ['致命弱点（会毁在哪）', v('心软')], ['原型词', '白月光'], ['功能位', '镜子'], ['结局状态与死亡/退场章', '在世（未完）'],
     ['金句锚', v('「张三那把刀，我一直替他留着。」')],
   ]))
   await writeRel('故事底本/全书设定/人物/次要角色/王五.md', card('王五', [
@@ -132,7 +133,7 @@ async function makeFilledProduct() {
     ['首次出场章', '第2章'], ['关键章节链', v('第2章露面')], ['核心关系', v('路人')],
     ['说话风格与人设锚点', v('沉默')], ['体貌锚点', v('原文未写')], ['衣着与装束', v('原文未写')],
     ['神态与动作锚', v('原文未写')], ['外在目标（要什么）', v('原文未写')], ['内在缺口（缺什么）', v('原文未写')],
-    ['致命弱点（会毁在哪）', v('原文未写')], ['原型词/功能位', '路人'], ['结局状态与死亡/退场章', '在世（未完）'],
+    ['致命弱点（会毁在哪）', v('原文未写')], ['原型词', '告密者'], ['功能位', '氛围'], ['结局状态与死亡/退场章', '在世（未完）'],
     ['金句锚', v('「张三的刀，我不碰。」')],
   ]))
   await writeRel('故事底本/全书设定/势力与组织/门派/青云门.md', card('青云门', [
@@ -664,6 +665,65 @@ test('T18b：骨架态空集合在进度模式降为 W_INDEX_EMPTY，交付模�
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+// 卡片字段清单必须与模板对得上：CARD_FIELDS 里的每个标签都要能在对应模板里找到。
+// 这条是 #20 引入的回归留下的教训——当时把模板里「原型词/功能位」一行拆成两行，
+// 却没同步改 CARD_FIELDS，于是每一张按模板填的卡都报「缺 1 个字段标签」；
+// 而测试夹具恰好写的是旧的合并写法，测试全绿、真实产物必失败。
+test('CARD_FIELDS 的每个标签都能在对应模板里找到（模板改了清单要跟着改）', async () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'book-breakdown', 'assets')
+  const TEMPLATE_OF = {
+    人物: '人物卡模板.md',
+    势力与组织: '势力卡模板.md',
+    地点: '地点卡模板.md',
+    物品: '物品卡模板.md',
+    概念: '概念卡模板.md',
+  }
+  const missing = []
+  for (const [kind, labels] of Object.entries(CARD_FIELDS)) {
+    const file = TEMPLATE_OF[kind]
+    let text
+    try { text = readFileSync(join(root, file), 'utf8') } catch { missing.push(`${kind}: 找不到模板 ${file}`); continue }
+    for (const label of labels) {
+      if (!text.includes(label)) missing.push(`${kind}: 模板 ${file} 里没有标签「${label}」`)
+    }
+  }
+  assert.deepEqual(missing, [], `CARD_FIELDS 与模板不一致：\n${missing.join('\n')}`)
+})
+
+test('CARD_FIELDS 覆盖模板里的每个可填字段（清单漏一项就等于少查一格）', async () => {
+  // 与上一条反着查：上一条防「清单里有模板没有的标签」（必误报），
+  // 这一条防「模板有而清单没有的标签」（必漏检）——两者都是回归，方向相反。
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'book-breakdown', 'assets')
+  const TEMPLATE_OF = {
+    人物: '人物卡模板.md',
+    势力与组织: '势力卡模板.md',
+    地点: '地点卡模板.md',
+    物品: '物品卡模板.md',
+    概念: '概念卡模板.md',
+  }
+  const uncovered = []
+  for (const [kind, file] of Object.entries(TEMPLATE_OF)) {
+    const text = readFileSync(join(root, file), 'utf8')
+    const lines = text.split(/\r?\n/)
+    // 只看「## 内容」小节里的「- 字段名：…」。模板开头的「## 概念」节（定义/目的/边界）
+    // 与文末元信息（填写者/条款）是说明区，不是卡片上要填的格子，不该进这份清单。
+    const body = []
+    let inContent = false
+    for (const line of lines) {
+      if (/^## /.test(line)) { inContent = /^## 内容/.test(line); continue }
+      if (inContent) body.push(line)
+    }
+    const labels = body.map((l) => /^- ([^：:\n]{2,20})：/.exec(l)).filter(Boolean).map((m) => m[1].trim())
+    const known = new Set(CARD_FIELDS[kind])
+    for (const label of new Set(labels)) {
+      // 同一行的括注写法（如「姓名（主名）」）在模板里可能是「姓名：」，用前缀双向匹配
+      const hit = known.has(label) || [...known].some((k) => k.startsWith(label) || label.startsWith(k))
+      if (!hit) uncovered.push(`${kind}: 模板 ${file} 的字段「${label}」不在 CARD_FIELDS 里`)
+    }
+  }
+  assert.deepEqual(uncovered, [], `CARD_FIELDS 漏了模板里的字段（这些格子不会被查）：\n${uncovered.join('\n')}`)
 })
 
 // T9：卡片字段存在性。此前 52 个卡片字段零校验——路径不被 productOf() 识别，
