@@ -186,15 +186,20 @@ test('CLI：--json 报告可解析且带下界与警告字段', () => {
   }
 })
 
-test('CLI：记录只写 manifest 的 cost 键，不新增产物文件（工作/ 仍只有三个）', () => {
+// 记成本只改 manifest，不落任何新文件。
+// 断言从「工作/ 只有三个文件」改成「工作/ 顶层的常驻文件不变」——
+// 因为 C-09 之后 工作/增量/ 是合法的过程目录。但「顶层三个常驻文件没被动过」仍然有意义：
+// 若有实现把成本写成 工作/cost.json 这类旁路文件，这条会红。
+test('CLI：记录只写 manifest 的 cost 键，不在 工作/ 顶层新增文件', () => {
   const dir = makeProduct()
   try {
+    const before = readdirSync(join(dir, '工作')).sort()
     runScript([dir, '--record', '--stage', '4', '--in', '1000', '--out', '100'])
     const manifestText = readFileSync(join(dir, '工作', 'manifest.json'), 'utf8')
     assert.match(manifestText, /"cost"/)
-    // 工作/ 目录内容不变：manifest.json、别名词典.md、逐章记录.md
-    const workFiles = readdirSync(join(dir, '工作')).sort()
-    assert.deepEqual(workFiles, ['manifest.json', '别名词典.md', '逐章记录.md'].sort())
+    // 顶层常驻文件不变：manifest.json、别名词典.md、逐章记录.md
+    assert.deepEqual(readdirSync(join(dir, '工作')).sort(), before, '记录成本不该在 工作/ 顶层新增或删除文件')
+    assert.deepEqual(before, ['manifest.json', '别名词典.md', '逐章记录.md'].sort())
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

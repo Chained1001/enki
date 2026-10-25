@@ -1005,3 +1005,45 @@ test('W_NO_COST：代价写了具体内容（非「无」）时不告警——�
     await writeFile(join(out, rel), orig, 'utf8')
   })
 })
+
+// ---------- C-09：工作/增量/ 是合法的过程目录 ----------
+//
+// 幕末增量中间件（工作/增量/幕NN.json）是伏笔台账与人物卡的写入通道：
+// agent 逐幕只报「看到了什么」，编号由合并脚本统一重编。
+// 手算编号是伏笔台账最大的出错来源——合错号、重号、跳号都从这里来。
+//
+// 这条要防的是两件事：
+//   ① 白名单缺规则 → 正常的增量文件被判 E_TREE_EXTRA，流程根本走不下去；
+//   ② 白名单放太宽 → 工作/ 变成什么都能塞的垃圾桶。
+test('C-09：工作/增量/ 下的增量片段不报 E_TREE_EXTRA', async () => {
+  await withFilled(async (out) => {
+    await mkdir(join(out, '工作', '增量'), { recursive: true })
+    await writeFile(join(out, '工作', '增量', '幕01.json'), '{"entities":[],"foreshadows":[]}\n', 'utf8')
+    await writeFile(join(out, '工作', '增量', '幕02.json'), '{"entities":[],"foreshadows":[]}\n', 'utf8')
+    await writeFile(join(out, '工作', '增量', '阶段06-装置.md'), '# 装置初版\n\n- 核心冲突：待定（第1章）\n', 'utf8')
+    const r = await validateOutput({ root: out })
+    const extra = r.errors.filter((e) => e.code === 'E_TREE_EXTRA')
+    assert.deepEqual(
+      extra.map((e) => e.file),
+      [],
+      `增量片段应被白名单接受，实际被判多余的：${extra.map((e) => e.file).join('、')}`,
+    )
+  })
+})
+
+test('C-09：增量目录的命名规则是收紧的，不是整个 工作/ 放行', async () => {
+  await withFilled(async (out) => {
+    await mkdir(join(out, '工作', '增量'), { recursive: true })
+    // 不合规的几种：章号不是两位、扩展名不对、名字随便起
+    await writeFile(join(out, '工作', '增量', '幕1.json'), '{}\n', 'utf8')
+    await writeFile(join(out, '工作', '增量', '幕01.txt'), 'x\n', 'utf8')
+    await writeFile(join(out, '工作', '增量', '随便.md'), 'x\n', 'utf8')
+    const r = await validateOutput({ root: out })
+    const extra = r.errors.filter((e) => e.code === 'E_TREE_EXTRA').map((e) => e.file).sort()
+    assert.deepEqual(
+      extra,
+      ['工作/增量/幕01.txt', '工作/增量/幕1.json', '工作/增量/随便.md'].sort(),
+      '白名单要按名字收紧：只认 幕NN.json 与 阶段NN-装置.md，不能整个 工作/ 放行',
+    )
+  })
+})
