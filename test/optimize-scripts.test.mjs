@@ -292,6 +292,97 @@ test('CLI：write-rows --dry-run 不落盘，正式跑才写；entity-index --en
   }
 })
 
+// ---------- C-26：--dry-run 一次报全部错误，不是首错即停 ----------
+//
+// 一批 20 章里错 10 处，首错即停意味着改一条跑一次、跑 10 轮；
+// 每轮还要重读整表——正是这个脚本存在的理由（读表成本占输入 71%）。
+// 预演路径本来就是「跑一遍看有没有问题」，只报第一条等于没起到预演的作用。
+
+test('C-26：--dry-run 一次收集全部错误，不是首错即停', () => {
+  const lines = table(3)
+  const rows = [
+    goodRow(1),
+    { ...goodRow(2), 章末钩型: '不存在的钩型' }, // E_ENUM
+    { ...goodRow(3), 一句话事件: '带|竖线的值' }, // E_FIELD
+  ]
+  const r = applyRows(lines, rows, { collectAll: true })
+  assert.equal(r.updated, 0, '有错时整体放弃，不能返回半个结果')
+  assert.equal(r.errors.length, 2, `该报 2 处错，实际 ${r.errors.length}：${r.errors.map((e) => e.code).join('、')}`)
+  assert.deepEqual(r.errors.map((e) => e.code).sort(), ['E_ENUM', 'E_FIELD'], '两类错都要报，不能只报第一类')
+  assert.ok(
+    r.errors.every((e) => /第 [23] 章/.test(e.message)),
+    '每条错都要点名是第几章，否则人还得自己找',
+  )
+})
+
+test('C-26：默认仍首错即停（单条写入用不着收集）', () => {
+  const lines = table(3)
+  const rows = [
+    { ...goodRow(2), 章末钩型: '不存在的钩型' },
+    { ...goodRow(3), 一句话事件: '带|竖线的值' },
+  ]
+  assert.throws(
+    () => applyRows(lines, rows),
+    (e) => e.code === 'E_ENUM',
+    '默认模式应首错即停，抛第一条错的码',
+  )
+})
+
+test('C-26：同一章的多处错要全报，不能只报该章第一条', () => {
+  const lines = table(2)
+  const rows = [
+    {
+      ...goodRow(1),
+      章末钩型: '不存在的钩型', // E_ENUM
+      爽点强度: '不存在', // E_ENUM
+      一句话事件: '带|竖线', // E_FIELD
+    },
+  ]
+  const r = applyRows(lines, rows, { collectAll: true })
+  assert.equal(r.errors.length, 3, `同一章的 3 处错都要报，实际 ${r.errors.length}`)
+})
+
+test('C-26：章号本身非法/不存在时，不再对那一章做字段检查（避免刷同一件事的变体）', () => {
+  const lines = table(2)
+  const rows = [
+    { ...goodRow(1), 章号: -5 }, // 章号非法：不该再报「缺字段」
+    { ...goodRow(99) }, // 表里没有第 99 章：同上
+  ]
+  const r = applyRows(lines, rows, { collectAll: true })
+  assert.deepEqual(r.errors.map((e) => e.code), ['E_CHAPTER', 'E_CHAPTER'], '每章只报一条章号错，不带出一串字段错')
+})
+
+test('C-26：CLI --dry-run 报全部错误且退出 1、不写盘', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'opt-c26-'))
+  try {
+    await mkdir(join(dir, '工作'), { recursive: true })
+    const recPath = join(dir, '工作', '逐章记录.md')
+    await writeFile(recPath, `${table(3).join('\n')}\n`, 'utf8')
+    const before = await readFile(recPath, 'utf8')
+    const rowsPath = join(dir, 'rows.json')
+    await writeFile(rowsPath, JSON.stringify([
+      { ...goodRow(2), 章末钩型: '不存在的钩型' },
+      { ...goodRow(3), 一句话事件: '带|竖线的值' },
+    ]), 'utf8')
+
+    const dry = runScript(join(SCRIPTS, 'write-rows.mjs'), [dir, '--rows', rowsPath, '--dry-run'])
+    assert.equal(dry.status, 1, '有错应退出 1')
+    assert.match(dry.stderr, /2 处问题/, `该报 2 处，实际输出：${dry.stderr}`)
+    assert.match(dry.stderr, /E_ENUM/)
+    assert.match(dry.stderr, /E_FIELD/)
+    assert.equal(await readFile(recPath, 'utf8'), before, '有错时不写盘')
+
+    const dryJson = runScript(join(SCRIPTS, 'write-rows.mjs'), [dir, '--rows', rowsPath, '--dry-run', '--json'])
+    assert.equal(dryJson.status, 1)
+    const parsed = JSON.parse(dryJson.stdout)
+    assert.equal(parsed.ok, false)
+    assert.equal(parsed.count, 2, '--json 也要给出全部错误，不能只给第一条')
+    assert.ok(Array.isArray(parsed.errors) && parsed.errors.length === 2)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 // C-12：首现章只能由脚本给。此前 agent 自己数，实测把 197 写成 239——
 // 因为出场章不连续，肉眼数「第几行」会偏移。这里造一本「首现在第 7 章、中间断档」的书，
 // 脚本的答案必须与逐章记录里真正第一次出现的那一行一致。

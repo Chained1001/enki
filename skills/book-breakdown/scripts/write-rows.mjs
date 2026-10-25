@@ -50,11 +50,21 @@ class RowError extends Error {
 }
 
 // 核心纯函数：给定表行与一批取值，返回新表行。不碰 IO，便于单测。
-export function applyRows(lines, entries, { partial = false, enums = ENUMS } = {}) {
+export function applyRows(lines, entries, { partial = false, enums = ENUMS, collectAll = false } = {}) {
   const cols = tableColumns('逐章记录')
   const headerIdx = cols.map((c) => c)
   const rows = []
   const byChapter = new Map()
+
+  // 收集模式（C-26）：一次跑完把所有错都报出来，而不是首错即停。
+  // 为什么重要：一批 20 章，若首错即停，人改完第一条再跑、又报第二条，改 10 处要跑 10 轮。
+  // 而且每轮都得重读整表——正是这个脚本存在的理由（读表成本占输入 71%）。
+  // 默认 false：单条写入场景下首错即停更快，也避免把「后面全错」刷满屏。
+  const errors = []
+  const record = (code, message) => {
+    if (!collectAll) throw new RowError(code, message)
+    errors.push(new RowError(code, message))
+  }
 
   // 定位表头与数据行
   let headerLine = -1
@@ -80,10 +90,16 @@ export function applyRows(lines, entries, { partial = false, enums = ENUMS } = {
     const no = Number(e.章号)
     // 章号 0 是合法的：prepare 在有前言时把前言记为 0、正文从 1 起。
     // 只禁负数与非整数（曾写成 no < 1，导致「有前言的书」前言那行永远写不进去）。
-    if (!Number.isInteger(no) || no < 0) throw new RowError('E_CHAPTER', `章号「${e.章号}」不是非负整数`)
-    if (seen.has(no)) throw new RowError('E_DUP', `输入里章号 ${no} 重复`)
+    if (!Number.isInteger(no) || no < 0) {
+      record('E_CHAPTER', `章号「${e.章号}」不是非负整数`)
+      continue // 章号都不合法，后面的检查（查行、查字段）对它没有意义，跳过以免重复报同一件事
+    }
+    if (seen.has(no)) record('E_DUP', `输入里章号 ${no} 重复`)
     seen.add(no)
-    if (!byChapter.has(no)) throw new RowError('E_CHAPTER', `逐章记录里没有第 ${no} 章的行`)
+    if (!byChapter.has(no)) {
+      record('E_CHAPTER', `逐章记录里没有第 ${no} 章的行`)
+      continue // 没有这一行，字段检查无从谈起
+    }
     for (const [key] of FIELDS) {
       const has = e[key] !== undefined && e[key] !== null && String(e[key]).trim() !== ''
       if (!has) {
@@ -94,22 +110,27 @@ export function applyRows(lines, entries, { partial = false, enums = ENUMS } = {
         // 若把它的缺失一律放行，等于给所有行开了个洞；只在这一种组合下放行。
         if (key === '爽点类型' && String(e.爽点强度 ?? '').trim() === '无') continue
         if (partial) continue
-        throw new RowError('E_FIELD', `第 ${no} 章缺字段「${key}」（要只补部分列请加 --partial）`)
+        record('E_FIELD', `第 ${no} 章缺字段「${key}」（要只补部分列请加 --partial）`)
+        continue
       }
       const v = String(e[key]).trim()
-      if (v === PLACEHOLDER) throw new RowError('E_FIELD', `第 ${no} 章的「${key}」仍是占位符「${PLACEHOLDER}」，不算填写`)
-      if (v.includes('|')) throw new RowError('E_FIELD', `第 ${no} 章的「${key}」含竖线，会撑裂表格；请改用全角「｜」或去掉`)
-      if (v.includes('\n')) throw new RowError('E_FIELD', `第 ${no} 章的「${key}」含换行`)
+      if (v === PLACEHOLDER) record('E_FIELD', `第 ${no} 章的「${key}」仍是占位符「${PLACEHOLDER}」，不算填写`)
+      else if (v.includes('|')) record('E_FIELD', `第 ${no} 章的「${key}」含竖线，会撑裂表格；请改用全角「｜」或去掉`)
+      else if (v.includes('\n')) record('E_FIELD', `第 ${no} 章的「${key}」含换行`)
     }
     for (const [key, enumName] of ENUM_FIELDS) {
       const v = e[key] === undefined || e[key] === null ? '' : String(e[key]).trim()
       if (!v) continue
       const allowed = enums[enumName]
       if (allowed && !allowed.includes(v)) {
-        throw new RowError('E_ENUM', `第 ${no} 章的「${key}」为「${v}」，不在枚举内（${allowed.join('、')}）`)
+        record('E_ENUM', `第 ${no} 章的「${key}」为「${v}」，不在枚举内（${allowed.join('、')}）`)
       }
     }
   }
+
+  // 收集模式下只要有一条错就整体放弃：返回 errors 而不是半个结果，
+  // 否则调用方可能拿一份「部分行已改」的表格去写盘。
+  if (errors.length) return { lines, updated: 0, total: entries.length, errors }
 
   // 改写目标行
   let updated = 0
@@ -132,7 +153,7 @@ export function applyRows(lines, entries, { partial = false, enums = ENUMS } = {
     updated += 1
   }
 
-  return { lines: out, updated, total: entries.length }
+  return { lines: out, updated, total: entries.length, errors: [] }
 }
 
 // ---------- CLI ----------
@@ -181,7 +202,9 @@ async function main() {
   const lines = raw.split(/\r?\n/)
   let result
   try {
-    result = applyRows(lines, entries, { partial: args.partial })
+    // --dry-run 走收集模式（C-26）：一次把全部错报出来。
+    // 这条路径本来就是「先预演一遍看有没有问题」，只报第一条等于让人改一条跑一次。
+    result = applyRows(lines, entries, { partial: args.partial, collectAll: args.dryRun })
   } catch (error) {
     if (error instanceof RowError) {
       if (args.json) console.log(JSON.stringify({ ok: false, code: error.code, message: error.message }))
@@ -189,6 +212,22 @@ async function main() {
       process.exit(1)
     }
     throw error
+  }
+
+  // 收集模式下有错：整体放弃，不写盘，把所有错列出来。
+  if (result.errors?.length) {
+    if (args.json) {
+      console.log(JSON.stringify({
+        ok: false,
+        dryRun: args.dryRun,
+        count: result.errors.length,
+        errors: result.errors.map((e) => ({ code: e.code, message: e.message })),
+      }))
+    } else {
+      console.error(`发现 ${result.errors.length} 处问题（本次未写入任何行）：`)
+      for (const e of result.errors) console.error(`  ${e.code}：${e.message}`)
+    }
+    process.exit(1)
   }
 
   if (!args.dryRun && result.updated > 0) {
