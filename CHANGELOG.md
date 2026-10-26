@@ -25,6 +25,7 @@
 - `test/process-paths.test.mjs`：文档里的过程路径必须通过契约，含旧路径反例与关键路径在场断言
 - `test/script-invocations.test.mjs`：技能文档里的脚本调用必须是 `node scripts/名称.mjs`，且目标脚本真实存在
 - `test/agent-schema.test.mjs`：子代理输出表与 `AGENT_REVIEW` 一致，`10` 只引用不再复写字段
+- ADR 索引（P2-2）：Q-01…Q-76 与 D-01…D-37 进 `docs/adr/README.md`，4 个承重决策落 ADR 文件
 
 ## [0.3.0] - 2026-10-25
 

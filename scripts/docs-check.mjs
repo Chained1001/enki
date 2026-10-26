@@ -22,6 +22,7 @@ export const AGENTS_POINTERS = [
   { path: 'docs/agents/issue-tracker.md' },
   { path: 'docs/agents/triage-labels.md' },
   { path: 'docs/agents/domain.md' },
+  { path: 'docs/adr/README.md' },
   { path: 'test/realbook-scale.test.mjs' },
   { path: 'scripts/init-skill.mjs' },
   { path: 'docs/规范/04-提交与分支.md' },

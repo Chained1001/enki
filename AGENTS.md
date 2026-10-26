@@ -51,6 +51,7 @@
 | 变更历史 | `CHANGELOG.md` |
 | 规则 | `docs/规范/` |
 | 规范来源 | `docs/规范/来源.md` |
+| 决策 | `docs/adr/README.md` |
 | 产品契约与运行流程 | `docs/产品/PRD.md`（「产品流程」节） |
 | 段名、表头、枚举、阈值 | `skills/book-breakdown/scripts/contract.mjs` |
 | 术语 | `GLOSSARY.md` |

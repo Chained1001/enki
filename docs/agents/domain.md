@@ -52,7 +52,7 @@ If your output contradicts an existing ADR, surface it explicitly rather than si
 
 ## 本仓库：**single-context**
 
-只有一个上下文，没有 monorepo 信号（无 `pnpm-workspace.yaml`、`package.json` 无 `workspaces` 字段、无 `packages/`）。`GLOSSARY.md` 与将来的 `docs/adr/` 都放在仓库根。
+只有一个上下文，没有 monorepo 信号（无 `pnpm-workspace.yaml`、`package.json` 无 `workspaces` 字段、无 `packages/`）。`GLOSSARY.md` 与 `docs/adr/` 都放在仓库根。
 
 ### 本仓库特有的前置阅读
 
@@ -64,4 +64,4 @@ If your output contradicts an existing ADR, surface it explicitly rather than si
 | `skills/book-breakdown/scripts/contract.mjs` | 段名、表头、枚举、阈值的**唯一事实源**；PRD 与模板是它的受守卫副本 |
 | `docs/产品/PRD.md` | 产品契约与运行流程；改动常需同步此文件的对应节 |
 
-**没有 `docs/adr/`**：本仓库的决策记录目前写在 `docs/产品/PRD.md` 的开放问题表（Q-01…Q-30）与 `docs/技术/` 的决策节（D-01…D-28）里，不是独立 ADR 文件。若将来建 `docs/adr/`，新决策写在那里，历史决策不必迁。
+**有 `docs/adr/`**：决策索引见 `docs/adr/README.md`，`Q-NN`／`D-NN` 的 ID、状态与来源都在那里登记，4 个承重决策另有 MADR-lite 正文。历史的 `Q-01…Q-76` 仍保留在 `docs/产品/PRD.md` 的开放问题表、`D-01…D-37` 仍保留在 `docs/技术/技术文档.md` 的架构决策表里；索引只记账，不复制正文。新决策按索引的 ID 规则增补，旧 ID 不复用。
