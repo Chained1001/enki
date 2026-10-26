@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 在 git 仓库里安装 pre-commit 钩子：提交前拦下 _拆解/ 产物目录的暂存文件，再跑 validate 与 test，任一失败则拒绝提交。只用 Node 内置模块。
+// 在 git 仓库里安装 pre-commit 钩子：提交前拦下 _拆解/ 产物目录的暂存文件，再跑 npm run check，任一失败则拒绝提交。只用 Node 内置模块。
 // 用法：install-hooks.mjs [路径] [--package-dir <相对路径>] [--force] [--dry-run] [--json] [--help]
 // 退出码：0 成功，1 业务失败（不是 git 仓库、已有钩子且未加 --force），2 参数错误。
 import { existsSync } from 'node:fs'
@@ -12,7 +12,7 @@ const USAGE = '用法：install-hooks.mjs [路径] [--package-dir <相对路径>
 function hookText(packageDir) {
   const cd = packageDir ? `cd "$root/${packageDir}"` : 'cd "$root"'
   return `#!/bin/sh
-# 由 scripts/install-hooks.mjs 生成。提交前检查暂存路径、跑静态校验与测试，任一失败则拒绝提交。
+# 由 scripts/install-hooks.mjs 生成。提交前检查暂存路径、跑 npm run check，任一失败则拒绝提交。
 set -e
 root=$(git rev-parse --show-toplevel)
 ${cd}
@@ -34,8 +34,8 @@ if [ ! -f package.json ]; then
   echo "pre-commit: 该目录没有 package.json，跳过校验" >&2
   exit 0
 fi
-npm run validate
-npm test
+# check = docs-check + validate + test，见 package.json。
+npm run check
 `
 }
 
@@ -134,7 +134,7 @@ async function main() {
       console.log(`将写入 ${result.path}${result.overwrite ? '（覆盖已有钩子）' : ''}`)
     } else {
       console.log(`已安装 pre-commit 钩子：${result.path}`)
-      console.log('下次 git commit 前会先拦下 *_拆解/ 产物目录的暂存文件，再运行 npm run validate 与 npm test。')
+      console.log('下次 git commit 前会先拦下 *_拆解/ 产物目录的暂存文件，再运行 npm run check。')
     }
   } catch (error) {
     if (error instanceof UsageError) {

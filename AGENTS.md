@@ -69,8 +69,11 @@
 
 | 命令 | 通过标准 |
 |---|---|
+| `npm run check` | 退出码为 0 |
 | `npm run validate` | 退出码为 0 |
 | `npm test` | 退出码为 0 |
+
+`npm run check` 依次跑 docs-check、`npm run validate`、`npm test`；CI 与 pre-commit 只跑这一条，后两行留作单段排查。
 
 ### 真书规模断言（`test/realbook-scale.test.mjs`）
 

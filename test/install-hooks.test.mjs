@@ -18,13 +18,15 @@ async function withRepo(run) {
   }
 }
 
-test('安装后钩子存在且调用 validate 与 test', async () => {
+test('安装后钩子存在且只调用 npm run check', async () => {
   await withRepo(async (root) => {
     const result = await installHooks({ root })
     assert.equal(result.action, 'installed')
     const text = readFileSync(join(root, '.git', 'hooks', 'pre-commit'), 'utf8')
-    assert.match(text, /npm run validate/)
-    assert.match(text, /npm test/)
+    assert.match(text, /^npm run check$/m)
+    // check 已把 validate 与 test 串起来，钩子不再各跑一遍。
+    assert.doesNotMatch(text, /^npm run validate$/m)
+    assert.doesNotMatch(text, /^npm test$/m)
   })
 })
 
@@ -55,17 +57,18 @@ test('黑名单豁免 test/fixtures/products/ 下的合成夹具', async () => {
   })
 })
 
-test('黑名单检查不破坏原有 validate 与 test，且先于两段校验执行', async () => {
+test('黑名单检查先于 npm run check 执行，check 仍是一行完整命令', async () => {
   await withRepo(async (root) => {
     await installHooks({ root })
     const text = readFileSync(join(root, '.git', 'hooks', 'pre-commit'), 'utf8')
-    // 回归：原有两段命令仍在，且各占一行完整可执行。
-    assert.match(text, /^npm run validate$/m)
-    assert.match(text, /^npm test$/m)
-    // 黑名单先跑：产物目录应在跑校验前就被拦下，而不是先浪费一轮 validate 与 test。
+    // 回归：命令仍在，且独占一行完整可执行。
+    assert.match(text, /^npm run check$/m)
+    // 黑名单先跑：产物目录应在跑校验前就被拦下，而不是先浪费一轮 docs-check、validate 与 test。
+    const checkAt = text.search(/^npm run check$/m)
+    assert.ok(checkAt >= 0)
     const guardAt = text.indexOf('_拆解/')
     assert.ok(guardAt >= 0)
-    assert.ok(guardAt < text.indexOf('npm run validate'), '黑名单检查应位于 npm run validate 之前')
+    assert.ok(guardAt < checkAt, '黑名单检查应位于 npm run check 之前')
     // 钩子由 POSIX sh 执行：不得出现 [[ ]]、Bash 数组等 bash 专有语法。
     assert.match(text, /^#!\/bin\/sh$/m)
     assert.equal(text.includes('[['), false)

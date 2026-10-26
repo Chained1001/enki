@@ -15,6 +15,7 @@
 - 规范自有化（P1-1）：`docs/规范/来源.md` 登记来源与偏离，`standards.test` 改为结构+来源检查，上游降为参考
 - 版本与 CHANGELOG 收口（P1-3）：去重 0.3.0 重复条目、破坏性变更加 **BREAKING:**、补 CONTRACT_VERSION 发版步骤、打 v0.3.0 tag
 - 错误码拆分（P1-5）：02 只留通用码、项目码移入 `docs/技术/错误码.md`，恢复 `E_ARGS`、补 `E_SOURCE` 定义，README 索引码改名 `E_README_INDEX`，脚本清单加「层级」列，新增 `test/error-codes.test.mjs` 门禁
+- docs-check 门禁（P1-4）：AGENTS 指针与 GLOSSARY 格式/拼音序进 `npm run check`，CI 与 pre-commit 改走 check
 
 ### Added
 
