@@ -272,11 +272,11 @@ test('CLI：write-rows --dry-run 不落盘，正式跑才写；entity-index --en
     const dry = runScript(join(SCRIPTS, 'write-rows.mjs'), [dir, '--rows', rowsPath, '--dry-run', '--json'])
     assert.equal(dry.status, 0, dry.stderr)
     assert.equal(await readFile(recPath, 'utf8'), before, '--dry-run 不得改文件')
-    assert.match(dry.stdout, /"updated":1/)
+    assert.match(dry.stdout, /"updated":\s*1/)
 
     const real = runScript(join(SCRIPTS, 'write-rows.mjs'), [dir, '--rows', rowsPath, '--json'])
     assert.equal(real.status, 0, real.stderr)
-    assert.match(real.stdout, /"updated":1/)
+    assert.match(real.stdout, /"updated":\s*1/)
     assert.match(await readFile(recPath, 'utf8'), /甲到了车站/)
 
     const idx = runScript(join(SCRIPTS, 'entity-index.mjs'), [dir, '--entity', '甲'])
@@ -378,7 +378,7 @@ test('C-26：CLI --dry-run 报全部错误且退出 1、不写盘', async () => 
     assert.equal(dryJson.status, 1)
     const parsed = JSON.parse(dryJson.stdout)
     assert.equal(parsed.ok, false)
-    assert.equal(parsed.count, 2, '--json 也要给出全部错误，不能只给第一条')
+    assert.equal(parsed.data.count, 2, '--json 也要给出全部错误，不能只给第一条')
     assert.ok(Array.isArray(parsed.errors) && parsed.errors.length === 2)
   } finally {
     await rm(dir, { recursive: true, force: true })
@@ -404,18 +404,18 @@ test('entity-index：首现章取脚本输出，断档出场也不会数错（C-
     const r = runScript(SCRIPT, [dir, '--json'])
     assert.equal(r.status, 0, r.stderr)
     const payload = JSON.parse(r.stdout)
-    const jia = payload.实体.find((e) => e.名称 === '甲')
+    const jia = payload.data.实体.find((e) => e.名称 === '甲')
     assert.equal(jia.首现章, 7, `首现章应为 7，实际 ${jia.首现章}`)
     assert.equal(jia.末次章, 40)
     assert.deepEqual(jia.章号, [7, 8, 19, 40], '出场章应按章号升序且不重复')
     // 采样上限随 --sample 变，默认 6（这里只 4 个出场章，全给）
-    assert.equal(payload.采样上限, 6)
+    assert.equal(payload.data.采样上限, 6)
     assert.deepEqual(jia.建议取证章, [7, 8, 19, 40], '出场章少于上限时全给')
 
     // 次要角色档位：上限 2，必须仍含首现与末次
     const r2 = runScript(SCRIPT, [dir, '--json', '--sample', '次要角色'])
     assert.equal(r2.status, 0, r2.stderr)
-    const jia2 = JSON.parse(r2.stdout).实体.find((e) => e.名称 === '甲')
+    const jia2 = JSON.parse(r2.stdout).data.实体.find((e) => e.名称 === '甲')
     assert.equal(jia2.建议取证章.length, 2, '次要角色档只采 2 章')
     assert.equal(jia2.建议取证章[0], 7, '采样必须含首现章')
     assert.equal(jia2.建议取证章[1], 40, '采样必须含末次章')

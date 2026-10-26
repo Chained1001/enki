@@ -256,7 +256,7 @@ test('C-29：--json 输出的「视角章占比」等于视角章/出场章', as
 
     const r = execFileSync('node', ['skills/book-breakdown/scripts/entity-index.mjs', out, '--json'], { cwd: ROOT, encoding: 'utf8' })
     const p = JSON.parse(r)
-    const z = p.实体.find((e) => e.名称 === '张三')
+    const z = p.data.实体.find((e) => e.名称 === '张三')
     assert.ok(z, '张三应在索引里')
     assert.equal(z.视角章占比, 1, '张三每章都是视角人物')
     assert.ok('分卷章数' in z, '每个实体都带分卷口径')

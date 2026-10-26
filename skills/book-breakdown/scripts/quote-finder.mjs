@@ -177,8 +177,47 @@ export function clip(s, limit = 120) {
 
 // ---------- CLI ----------
 
+const USAGE =
+  '用法：node quote-finder.mjs <产物目录> --entity 名称 [--chapters 1,2,3] [--max 3] [--limit 120] [--context] [--json]\n' +
+  '      node quote-finder.mjs <产物目录> --grep-all 引句.json [--min-score 0.8] [--json]  批量定位（出处核验用）\n' +
+  '      node quote-finder.mjs --help'
+
+const HELP = `${USAGE}
+
+按实体与章号定位可引用的原句，替代「为了找一句出处而通读整章」。
+
+参数：
+  <产物目录>        含 工作/manifest.json 与 原文/章节/ 的拆解产物目录
+  --entity 名称      要检索的实体（别称从 工作/别名词典.md 取）
+  --chapters 1,2,3  指定取证章；不给则按逐章记录索引自动采样
+  --max N           每章最多取 N 句（默认 3）
+  --limit N         引句截断长度（默认 120）
+  --context         命中句前后各带一句
+  --grep-all 文件    批量定位引句（格式 [{"编号":"n1","引句":"……"}]）
+  --min-score 0.8   配合 --grep-all 的相似度下限（0-1）
+  --json            stdout 只输出一个 { ok, errors, data } 对象
+  --help            输出本说明并退出`
+
+class CliError extends Error {
+  constructor(message, code = 'E_ARGS') {
+    super(message)
+    this.code = code
+  }
+}
+
+// --json 声明后，成功与失败都只输出一个 { ok, errors, data } 对象（规范 02「接口」）。
+// data 保留原字段；非 --json 路径的默认输出保持原样。
+function emitFailure({ code, message, data = {}, exitCode = 1, json = false, withCode = true }) {
+  if (json) {
+    console.log(JSON.stringify({ ok: false, errors: [{ code, file: '', message }], data }, null, 2))
+  } else {
+    console.error(withCode ? `${code}：${message}` : message)
+  }
+  process.exitCode = exitCode
+}
+
 function parseArgs(argv) {
-  const out = { dir: null, entity: null, chapters: null, max: 3, context: false, json: false, limit: 120, grepAll: null, minScore: null }
+  const out = { dir: null, entity: null, chapters: null, max: 3, context: false, json: false, help: false, limit: 120, grepAll: null, minScore: null }
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i]
     if (a === '--entity') out.entity = argv[++i]
@@ -187,47 +226,82 @@ function parseArgs(argv) {
     else if (a === '--limit') out.limit = Number(argv[++i])
     else if (a === '--context') out.context = true
     else if (a === '--json') out.json = true
+    else if (a === '--help' || a === '-h') out.help = true
     else if (a === '--grep-all') out.grepAll = argv[++i]
     else if (a === '--min-score') out.minScore = Number(argv[++i])
-    else if (!a.startsWith('-')) out.dir = a
+    else if (a.startsWith('-')) throw new CliError(`未知参数 ${a}。${USAGE}`)
+    else if (out.dir === null) out.dir = a
+    else throw new CliError(`多余的参数 ${a}。${USAGE}`)
   }
   return out
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2))
+  let args
+  try {
+    args = parseArgs(process.argv.slice(2))
+  } catch (error) {
+    emitFailure({
+      code: error.code ?? 'E_ARGS',
+      message: error.message,
+      exitCode: 2,
+      json: process.argv.includes('--json'),
+      withCode: false,
+    })
+    return
+  }
+  if (args.help) {
+    console.log(HELP)
+    return
+  }
   if (!args.dir || (!args.entity && !args.grepAll)) {
-    console.error('用法：node quote-finder.mjs <产物目录> --entity 名称 [--chapters 1,2,3] [--max 3] [--limit 120] [--context] [--json]\n' +
-      '      node quote-finder.mjs <产物目录> --grep-all 引句.json [--min-score 0.8] [--json]  批量定位（出处核验用）')
-    process.exit(2)
+    emitFailure({ code: 'E_ARGS', message: USAGE, exitCode: 2, json: args.json, withCode: false })
+    return
   }
   if (!Number.isFinite(args.max) || args.max < 1) {
-    console.error('--max 须为正整数')
-    process.exit(2)
+    emitFailure({ code: 'E_ARGS', message: '--max 须为正整数', exitCode: 2, json: args.json, withCode: false })
+    return
   }
 
   // --grep-all：批量定位，给出处核验子代理用（C-14）。
   // 提前返回，不走后面「按实体找句」那条路——两者用途不同：
   // --entity 是建卡取证（要原文句子），--grep-all 是核验定位（要知道这句在哪一章）。
   if (args.grepAll) {
-    const manifest = await readManifest(args.dir)
+    let manifest
+    try {
+      manifest = await readManifest(args.dir)
+    } catch (error) {
+      emitFailure({ code: error.code ?? 'E_MANIFEST', message: error.message, json: args.json })
+      return
+    }
     let quotes
     try {
       const raw = await readFile(args.grepAll, 'utf8')
       const parsed = JSON.parse(raw)
       quotes = Array.isArray(parsed) ? parsed : parsed.引句 ?? parsed.quotes
     } catch (error) {
-      console.error(`E_ARGS：读不出引句文件「${args.grepAll}」：${error.message}`)
-      console.error('格式：[{"编号":"n1","引句":"……"}]，或 {"引句":[…]}\\n')
-      process.exit(2)
+      emitFailure({
+        code: 'E_ARGS',
+        message: `E_ARGS：读不出引句文件「${args.grepAll}」：${error.message}\n格式：[{"编号":"n1","引句":"……"}]，或 {"引句":[…]}`,
+        exitCode: 2,
+        json: args.json,
+        withCode: false,
+      })
+      return
     }
     if (!Array.isArray(quotes) || !quotes.length) {
-      console.error('E_ARGS：引句文件里没有条目。应为 [{"编号":"n1","引句":"……"}]')
-      process.exit(2)
+      emitFailure({
+        code: 'E_ARGS',
+        message: 'E_ARGS：引句文件里没有条目。应为 [{"编号":"n1","引句":"……"}]',
+        exitCode: 2,
+        json: args.json,
+        withCode: false,
+      })
+      return
     }
     if (args.minScore !== null && !(args.minScore >= 0 && args.minScore <= 1)) {
-      console.error('E_ARGS：--min-score 应在 0 与 1 之间')
-      process.exit(2)
+      emitFailure({ code: 'E_ARGS', message: 'E_ARGS：--min-score 应在 0 与 1 之间', exitCode: 2, json: args.json, withCode: false })
+      return
     }
 
     // 把每章正文读进来。全书一遍，之后所有引句共用这份文本与倒排索引——
@@ -242,28 +316,46 @@ async function main() {
     const results = locateQuotes(chapters, quotes, { minScore: args.minScore ?? undefined })
     const hit = results.filter((r) => r.命中.length).length
     if (args.json) {
-      console.log(JSON.stringify({ 引句数: results.length, 有命中: hit, 结果: results }, null, 1))
-    } else {
-      for (const r of results) {
-        const id = r.编号 ? `[${r.编号}] ` : ''
-        if (!r.命中.length) {
-          console.log(`${id}无命中　${clip(r.引句, args.limit)}${r.说明 ? `（${r.说明}）` : ''}`)
-          continue
-        }
-        const top = r.命中[0]
-        console.log(`${id}第 ${top.章号} 章（相似度 ${top.相似度}）　${clip(r.引句, args.limit)}`)
-        console.log(`     候选句：${clip(top.命中句 ?? '', args.limit)}`)
-        if (r.命中.length > 1) {
-          console.log(`     其他候选章：${r.命中.slice(1).map((x) => `第${x.章号}章(${x.相似度})`).join('、')}`)
-        }
+      const data = { 引句数: results.length, 有命中: hit, 结果: results }
+      if (hit === 0) {
+        emitFailure({
+          code: 'E_NOT_FOUND',
+          message: '所有引句均未命中：全书找不到与这些引句相近的句子',
+          data,
+          json: true,
+          withCode: false,
+        })
+        return
       }
-      console.log(`\n共 ${results.length} 条，${hit} 条有命中。子代理只需判断命中的那句是不是同一意思，不必自己检索。`)
+      console.log(JSON.stringify({ ok: true, errors: [], data }, null, 2))
+      return
     }
+    for (const r of results) {
+      const id = r.编号 ? `[${r.编号}] ` : ''
+      if (!r.命中.length) {
+        console.log(`${id}无命中　${clip(r.引句, args.limit)}${r.说明 ? `（${r.说明}）` : ''}`)
+        continue
+      }
+      const top = r.命中[0]
+      console.log(`${id}第 ${top.章号} 章（相似度 ${top.相似度}）　${clip(r.引句, args.limit)}`)
+      console.log(`     候选句：${clip(top.命中句 ?? '', args.limit)}`)
+      if (r.命中.length > 1) {
+        console.log(`     其他候选章：${r.命中.slice(1).map((x) => `第${x.章号}章(${x.相似度})`).join('、')}`)
+      }
+    }
+    console.log(`\n共 ${results.length} 条，${hit} 条有命中。子代理只需判断命中的那句是不是同一意思，不必自己检索。`)
     // 全无命中时退出 1：调用方要能区分「定位完了但都没找到」与「根本没跑」。
-    process.exit(hit === 0 ? 1 : 0)
+    if (hit === 0) process.exitCode = 1
+    return
   }
 
-  const manifest = await readManifest(args.dir)
+  let manifest
+  try {
+    manifest = await readManifest(args.dir)
+  } catch (error) {
+    emitFailure({ code: error.code ?? 'E_MANIFEST', message: error.message, json: args.json })
+    return
+  }
   const byNo = new Map(manifest.chapters.map((c) => [c.no, c]))
 
   // 别名表（可能为空，骨架态）
@@ -280,22 +372,32 @@ async function main() {
   if (args.chapters) {
     chapterNos = args.chapters.split(',').map((x) => Number(x.trim())).filter((n) => Number.isFinite(n))
     if (!chapterNos.length) {
-      console.error('--chapters 解析不出章号')
-      process.exit(2)
+      emitFailure({ code: 'E_ARGS', message: '--chapters 解析不出章号', exitCode: 2, json: args.json, withCode: false })
+      return
     }
   } else {
     let recRaw = ''
     try {
       recRaw = await readFile(join(args.dir, '工作', '逐章记录.md'), 'utf8')
     } catch (error) {
-      console.error(`逐章记录不可读：${error.message}。请先用 --chapters 指定章号`)
-      process.exit(1)
+      emitFailure({
+        code: 'E_FILE',
+        message: `逐章记录不可读：${error.message}。请先用 --chapters 指定章号`,
+        json: args.json,
+        withCode: false,
+      })
+      return
     }
     const { index } = buildIndex(recRaw.split(/\r?\n/))
     const e = index.get(args.entity)
     if (!e) {
-      console.error(`逐章记录索引里没有「${args.entity}」；请先完成阶段 4，或用 --chapters 指定章号`)
-      process.exit(1)
+      emitFailure({
+        code: 'E_NOT_FOUND',
+        message: `逐章记录索引里没有「${args.entity}」；请先完成阶段 4，或用 --chapters 指定章号`,
+        json: args.json,
+        withCode: false,
+      })
+      return
     }
     chapterNos = sampleChapters(e.章号)
   }
@@ -319,9 +421,21 @@ async function main() {
     results.push({ 章号: no, 标题: ch.title, 来源文件: ch.file, 命中: hits })
   }
 
+  const total = results.reduce((n, r) => n + (r.命中?.length ?? 0), 0)
+
   if (args.json) {
-    console.log(JSON.stringify({ 实体: args.entity, 称呼: names, 章数: chapterNos.length, 结果: results }, null, 1))
-    if (results.every((r) => !r.命中 || r.命中.length === 0)) process.exit(1)
+    const data = { 实体: args.entity, 称呼: names, 章数: chapterNos.length, 结果: results }
+    if (total === 0) {
+      emitFailure({
+        code: 'E_NOT_FOUND',
+        message: '所有目标章均未命中：该实体可能只以别称出现，请先补「工作/别名词典.md」再重试；或换章号',
+        data,
+        json: true,
+        withCode: false,
+      })
+      return
+    }
+    console.log(JSON.stringify({ ok: true, errors: [], data }, null, 2))
     return
   }
 
@@ -342,12 +456,12 @@ async function main() {
       if (h.后句) console.log(`    后：「${clip(h.后句, 60)}」`)
     }
   }
-  const total = results.reduce((n, r) => n + (r.命中?.length ?? 0), 0)
   if (total === 0) {
     console.error('\n所有目标章均未命中：该实体可能只以别称出现，请先补「工作/别名词典.md」再重试；或换章号。')
-    process.exit(1)
+    process.exitCode = 1
+  } else {
+    console.log('\n以上引句可直接用于卡片出处（第 N 章＋引句，F-14）；写入前请核对引句与结论确实对应。')
   }
-  console.log('\n以上引句可直接用于卡片出处（第 N 章＋引句，F-14）；写入前请核对引句与结论确实对应。')
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

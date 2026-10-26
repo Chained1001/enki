@@ -160,25 +160,71 @@ export function applyRows(lines, entries, { partial = false, enums = ENUMS, coll
 
 // ---------- CLI ----------
 
+const USAGE = '用法：node write-rows.mjs <产物目录> --rows <条目.json> [--partial] [--dry-run] [--json] [--help]'
+const ENTRY_FORMAT =
+  '条目格式：[{"章号":1,"视角人物":"…","地点":"…","出场人物":"…","一句话事件":"…","剧情线":"主线","伏笔埋收":"埋：…","情绪":"扬","章末钩型":"悬念","爽点强度":"小","爽点类型":"逆袭"}]'
+
+class CliError extends Error {
+  constructor(message, code = 'E_ARGS') {
+    super(message)
+    this.code = code
+  }
+}
+
+// --json 声明后，成功与失败都只输出一个 { ok, errors, data } 对象（规范 02「接口」）。
+// data 保留原字段；非 --json 路径的默认输出保持原样。
+function emitFailure({ code, message, data = {}, exitCode = 1, json = false, withCode = true }) {
+  if (json) {
+    console.log(JSON.stringify({ ok: false, errors: [{ code, file: '', message }], data }, null, 2))
+  } else {
+    console.error(withCode ? `${code}：${message}` : message)
+  }
+  process.exitCode = exitCode
+}
+
 function parseArgs(argv) {
-  const out = { dir: null, rows: null, partial: false, dryRun: false, json: false }
+  const out = { dir: null, rows: null, partial: false, dryRun: false, json: false, help: false }
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i]
     if (a === '--rows') out.rows = argv[++i]
     else if (a === '--partial') out.partial = true
     else if (a === '--dry-run') out.dryRun = true
     else if (a === '--json') out.json = true
-    else if (!a.startsWith('-')) out.dir = a
+    else if (a === '--help' || a === '-h') out.help = true
+    else if (a.startsWith('-')) throw new CliError(`未知参数 ${a}。${USAGE}`)
+    else out.dir = a
   }
   return out
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2))
+  let args
+  try {
+    args = parseArgs(process.argv.slice(2))
+  } catch (error) {
+    emitFailure({
+      code: error.code ?? 'E_ARGS',
+      message: error.message,
+      exitCode: 2,
+      json: process.argv.includes('--json'),
+      withCode: false,
+    })
+    return
+  }
+  if (args.help) {
+    console.log(USAGE)
+    console.log(ENTRY_FORMAT)
+    return
+  }
   if (!args.dir || !args.rows) {
-    console.error('用法：node write-rows.mjs <产物目录> --rows <条目.json> [--partial] [--dry-run] [--json]')
-    console.error('条目格式：[{"章号":1,"视角人物":"…","地点":"…","出场人物":"…","一句话事件":"…","剧情线":"主线","伏笔埋收":"埋：…","情绪":"扬","章末钩型":"悬念","爽点强度":"小","爽点类型":"逆袭"}]')
-    process.exit(2)
+    emitFailure({
+      code: 'E_ARGS',
+      message: `${USAGE}\n${ENTRY_FORMAT}`,
+      exitCode: 2,
+      json: args.json,
+      withCode: false,
+    })
+    return
   }
 
   const file = join(args.dir, '工作', '逐章记录.md')
@@ -186,19 +232,24 @@ async function main() {
   try {
     raw = await readFile(file, 'utf8')
   } catch (error) {
-    console.error(`逐章记录不可读（${file}）：${error.message}`)
-    process.exit(1)
+    emitFailure({ code: 'E_FILE', message: `逐章记录不可读（${file}）：${error.message}`, json: args.json, withCode: false })
+    return
   }
   let entries
   try {
     entries = JSON.parse(await readFile(args.rows, 'utf8'))
   } catch (error) {
-    console.error(`条目文件不可读或不是合法 JSON（${args.rows}）：${error.message}`)
-    process.exit(1)
+    emitFailure({
+      code: 'E_FILE',
+      message: `条目文件不可读或不是合法 JSON（${args.rows}）：${error.message}`,
+      json: args.json,
+      withCode: false,
+    })
+    return
   }
   if (!Array.isArray(entries)) {
-    console.error('条目文件应为数组')
-    process.exit(1)
+    emitFailure({ code: 'E_FIELD', message: '条目文件应为数组', json: args.json, withCode: false })
+    return
   }
 
   const lines = raw.split(/\r?\n/)
@@ -209,9 +260,8 @@ async function main() {
     result = applyRows(lines, entries, { partial: args.partial, collectAll: args.dryRun })
   } catch (error) {
     if (error instanceof RowError) {
-      if (args.json) console.log(JSON.stringify({ ok: false, code: error.code, message: error.message }))
-      else console.error(`${error.code}：${error.message}`)
-      process.exit(1)
+      emitFailure({ code: error.code, message: error.message, json: args.json })
+      return
     }
     throw error
   }
@@ -221,15 +271,15 @@ async function main() {
     if (args.json) {
       console.log(JSON.stringify({
         ok: false,
-        dryRun: args.dryRun,
-        count: result.errors.length,
-        errors: result.errors.map((e) => ({ code: e.code, message: e.message })),
-      }))
+        errors: result.errors.map((e) => ({ code: e.code, file: '', message: e.message })),
+        data: { dryRun: args.dryRun, count: result.errors.length },
+      }, null, 2))
     } else {
       console.error(`发现 ${result.errors.length} 处问题（本次未写入任何行）：`)
       for (const e of result.errors) console.error(`  ${e.code}：${e.message}`)
     }
-    process.exit(1)
+    process.exitCode = 1
+    return
   }
 
   if (!args.dryRun && result.updated > 0) {
@@ -237,7 +287,11 @@ async function main() {
   }
 
   if (args.json) {
-    console.log(JSON.stringify({ ok: true, updated: result.updated, total: result.total, dryRun: args.dryRun }))
+    console.log(JSON.stringify({
+      ok: true,
+      errors: [],
+      data: { updated: result.updated, total: result.total, dryRun: args.dryRun },
+    }, null, 2))
   } else {
     const verb = args.dryRun ? '将更新' : '已更新'
     console.log(`${verb} ${result.updated} 行（提交 ${result.total} 行，其中 ${result.total - result.updated} 行内容未变）`)

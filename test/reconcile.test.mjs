@@ -237,8 +237,8 @@ test('CLI：--json 输出可解析，每条对账行四项齐全', async () => {
     } catch (e) { out = e.stdout }
     const parsed = JSON.parse(out)
     assert.equal(parsed.ok, false)
-    assert.ok(parsed.rows.length >= 5, '五项都要在')
-    for (const row of parsed.rows) {
+    assert.ok(parsed.data.rows.length >= 5, '五项都要在')
+    for (const row of parsed.data.rows) {
       // 每条都要有这四项，缺一项贴进表格就少一格
       for (const k of ['项', '期望', '实际', '结论']) {
         assert.ok(k in row, '对账行缺字段「' + k + '」：' + JSON.stringify(row))

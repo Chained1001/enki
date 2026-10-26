@@ -123,8 +123,31 @@ async function loadFiles() {
   return files.sort((x, y) => x.name.localeCompare(y.name, 'zh'))
 }
 
+const USAGE = '用法：node reference-index.mjs [--write|--check] [--help]'
+const HELP = `${USAGE}
+
+生成「references/索引.md」：列出每份文件每个小节的行范围与体量，供按 offset/limit 只读需要的几节。
+
+参数：
+  --write   重新生成 索引.md
+  --check   与磁盘上的 索引.md 比对，不一致退出 1
+  --help    输出本说明并退出
+
+不带参数时把索引打印到 stdout。`
+
 async function main() {
   const argv = process.argv.slice(2)
+  if (argv.includes('--help') || argv.includes('-h')) {
+    console.log(HELP)
+    return
+  }
+  for (const a of argv) {
+    if (a !== '--check' && a !== '--write') {
+      console.error(`未知参数 ${a}。${USAGE}`)
+      process.exitCode = 2
+      return
+    }
+  }
   const files = await loadFiles()
   const expected = buildIndex(files)
   const indexPath = join(refDir, INDEX_NAME)

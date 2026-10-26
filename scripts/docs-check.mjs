@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 校验 AGENTS.md 的指针可解析，以及 GLOSSARY.md 的格式、长度与拼音序。只用 Node 内置模块。
 // 用法：docs-check.mjs [--root <目录>] [--help]
-// 退出码：0 通过，1 有问题或参数错误。
+// 退出码：0 通过，1 文档有问题，2 参数错误。
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -162,7 +162,7 @@ function main() {
     options = parseArgs(process.argv.slice(2))
   } catch (error) {
     console.error(`${error.message}\n${USAGE}`)
-    return 1
+    return 2
   }
   if (options.help) {
     console.log(USAGE)

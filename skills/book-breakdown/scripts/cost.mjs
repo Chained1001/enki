@@ -174,7 +174,7 @@ export async function recordCost({ root, stage, input, output, mode = 'record', 
 }
 
 function parseArgs(argv) {
-  const out = { dir: null, record: false, set: false, report: false, check: false, json: false, stage: null, input: null, output: null, calls: 1 }
+  const out = { dir: null, record: false, set: false, report: false, check: false, json: false, help: false, stage: null, input: null, output: null, calls: 1 }
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i]
     if (a === '--record') out.record = true
@@ -182,52 +182,114 @@ function parseArgs(argv) {
     else if (a === '--report') out.report = true
     else if (a === '--check') out.check = true
     else if (a === '--json') out.json = true
+    else if (a === '--help' || a === '-h') out.help = true
     else if (a === '--stage') out.stage = Number(argv[++i])
     else if (a === '--in') out.input = argv[++i]
     else if (a === '--out') out.output = argv[++i]
     else if (a === '--calls') out.calls = Number(argv[++i])
-    else if (!a.startsWith('-')) out.dir = a
+    else if (a.startsWith('-')) throw new UsageError(`未知参数 ${a}。${USAGE}`, 'E_ARGS')
+    else if (out.dir === null) out.dir = a
+    else throw new UsageError(`多余的参数 ${a}。${USAGE}`, 'E_ARGS')
   }
   return out
 }
 
+const USAGE =
+  '用法：node cost.mjs <产物目录> --record|--set --stage N [--in 37500] [--out 1200] [--calls 1]\n' +
+  '      node cost.mjs <产物目录> --report [--json]\n' +
+  '      node cost.mjs <产物目录> --check [--json]'
+
+const HELP = `${USAGE}
+
+把每次 LLM 调用的用量记进 manifest.cost，并用产物算出确定性下界交叉核对（PRD M-06）。
+
+参数：
+  <产物目录>   含 工作/manifest.json 的拆解产物目录
+  --record     累加一次上报（默认模式）
+  --set        用本次上报覆盖该阶段
+  --stage N    阶段号 0-7
+  --in N       输入 tokens，支持 37500 / 37k / 1.2m
+  --out N      输出 tokens
+  --calls N    本次上报的调用次数（默认 1）
+  --report     打印用量表与下界
+  --check      交付前核对：没有计量即以 1 退出
+  --json       stdout 只输出一个 { ok, errors, data } 对象
+  --help       输出本说明并退出`
+
+class UsageError extends Error {
+  constructor(message, code = 'E_ARGS') {
+    super(message)
+    this.code = code
+  }
+}
+
+// --json 声明后，成功与失败都只输出一个 { ok, errors, data } 对象（规范 02「接口」）。
+// data 保留原字段；非 --json 路径的默认输出保持原样。
+function emitFailure({ code, message, data = {}, exitCode = 1, json = false, withCode = true }) {
+  if (json) {
+    console.log(JSON.stringify({ ok: false, errors: [{ code, file: '', message }], data }, null, 2))
+  } else {
+    console.error(withCode ? `${code}：${message}` : message)
+  }
+  process.exitCode = exitCode
+}
+
 async function main() {
-  const args = parseArgs(process.argv.slice(2))
+  let args
+  try {
+    args = parseArgs(process.argv.slice(2))
+  } catch (error) {
+    emitFailure({
+      code: error.code ?? 'E_ARGS',
+      message: error.message,
+      exitCode: 2,
+      json: process.argv.includes('--json'),
+      withCode: false,
+    })
+    return
+  }
+  if (args.help) {
+    console.log(HELP)
+    return
+  }
   if (!args.dir) {
-    console.error('用法：node cost.mjs <产物目录> --record|--set --stage N [--in 37500] [--out 1200] [--calls 1]')
-    console.error('      node cost.mjs <产物目录> --report [--json]')
-    console.error('      node cost.mjs <产物目录> --check')
-    process.exit(2)
+    emitFailure({ code: 'E_ARGS', message: USAGE, exitCode: 2, json: args.json, withCode: false })
+    return
   }
 
-  const manifestPath = join(args.dir, '工作', 'manifest.json')
   let manifest
   try {
     manifest = await readManifest(args.dir)
   } catch (error) {
-    console.error(error.message)
-    process.exit(1)
+    emitFailure({ code: error.code ?? 'E_MANIFEST', message: error.message, json: args.json })
+    return
   }
 
   // ---- 记录 ----
   if (args.record || args.set) {
     if (!Number.isInteger(args.stage) || !STAGE_NAMES[args.stage]) {
-      console.error(`--stage 须为 0-7，收到「${args.stage}」`)
-      process.exit(2)
+      emitFailure({ code: 'E_ARGS', message: `--stage 须为 0-7，收到「${args.stage}」`, exitCode: 2, json: args.json, withCode: false })
+      return
     }
     const input = parseAmount(args.input)
     const output = parseAmount(args.output)
     if (args.input !== null && input === null) {
-      console.error(`--in 无法解析为数量：「${args.input}」（支持 37500 / 37k / 1.2m）`)
-      process.exit(2)
+      emitFailure({
+        code: 'E_ARGS',
+        message: `--in 无法解析为数量：「${args.input}」（支持 37500 / 37k / 1.2m）`,
+        exitCode: 2,
+        json: args.json,
+        withCode: false,
+      })
+      return
     }
     if (args.output !== null && output === null) {
-      console.error(`--out 无法解析为数量：「${args.output}」`)
-      process.exit(2)
+      emitFailure({ code: 'E_ARGS', message: `--out 无法解析为数量：「${args.output}」`, exitCode: 2, json: args.json, withCode: false })
+      return
     }
     if (input === null && output === null) {
-      console.error('--in 与 --out 至少要给一个')
-      process.exit(2)
+      emitFailure({ code: 'E_ARGS', message: '--in 与 --out 至少要给一个', exitCode: 2, json: args.json, withCode: false })
+      return
     }
     const result = await recordCost({
       root: args.dir,
@@ -239,11 +301,25 @@ async function main() {
       // 并发保护在 recordCost 里：读到的内容在写盘前变了就重读重试（C-08）。
     })
     if (!result.ok) {
-      console.error(result.message)
-      process.exit(1)
+      emitFailure({ code: 'E_CONFLICT', message: result.message, json: args.json, withCode: false })
+      return
     }
     manifest = result.manifest
     const s = manifest.cost.stages[String(args.stage)]
+    if (args.json) {
+      console.log(JSON.stringify({
+        ok: true,
+        errors: [],
+        data: {
+          stage: args.stage,
+          stageName: STAGE_NAMES[args.stage],
+          stageTotal: s,
+          total: manifest.cost.total,
+          attempts: result.attempts,
+        },
+      }, null, 2))
+      return
+    }
     console.log(`阶段 ${args.stage}（${STAGE_NAMES[args.stage]}）累计：输入 ${fmt(s.in)}、输出 ${fmt(s.out)}、调用 ${s.calls} 次`)
     console.log(`全程累计：输入 ${fmt(manifest.cost.total.in)}、输出 ${fmt(manifest.cost.total.out)}`)
     return
@@ -256,8 +332,17 @@ async function main() {
 
   if (!cost || !cost.total || cost.total.calls === 0) {
     if (args.check) {
-      console.error('E_COST_MISSING：manifest 里没有成本计量。请在各阶段用 --record 上报用量，否则无法回答「这本书花了多少」。')
-      process.exit(1)
+      emitFailure({
+        code: 'E_COST_MISSING',
+        message: 'E_COST_MISSING：manifest 里没有成本计量。请在各阶段用 --record 上报用量，否则无法回答「这本书花了多少」。',
+        json: args.json,
+        withCode: false,
+      })
+      return
+    }
+    if (args.json) {
+      console.log(JSON.stringify({ ok: true, errors: [], data: { cost: null, 下界: lb, 警告: [] } }, null, 2))
+      return
     }
     console.log('尚未记录任何用量。')
     console.log(`确定性下界（供核对）：阶段 4 输入 ≥ ${fmt(lb.阶段4输入下界)}（全书扣掉阶段 3 已读的开篇，合计 ≥ ${fmt(lb.阶段3与4合计下界)}）；产物输出 ≈ ${fmt(lb.输出下界)}`)
@@ -281,8 +366,8 @@ async function main() {
   }
 
   if (args.json) {
-    console.log(JSON.stringify({ ok: true, cost, 下界: lb, 警告: warnings }, null, 1))
-    if (args.check && warnings.length) process.exitCode = 0 // 警告不阻断；缺计量才阻断
+    console.log(JSON.stringify({ ok: true, errors: [], data: { cost, 下界: lb, 警告: warnings } }, null, 2))
+    // 警告不阻断；缺计量才阻断
     return
   }
 

@@ -143,7 +143,7 @@ async function main() {
       return
     }
     if (options.json) {
-      console.log(JSON.stringify({ ok: false, errors: [{ code: 'E_HOOK', message: error.message }], data: {} }, null, 2))
+      console.log(JSON.stringify({ ok: false, errors: [{ code: 'E_HOOK', file: '', message: error.message }], data: {} }, null, 2))
     } else {
       console.error(error.message)
     }

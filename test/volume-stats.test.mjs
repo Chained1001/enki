@@ -231,9 +231,9 @@ test('CLI：--json 输出可解析，字段齐', async () => {
       cwd: join(import.meta.dirname, '..'), encoding: 'utf8',
     })
     const parsed = JSON.parse(out)
-    assert.equal(parsed.perVolume[0].sharpChapters, 1)
-    assert.equal(parsed.perVolume[0].maxHookRun, 2)
-    assert.ok(Array.isArray(parsed.perVolume[0].hookDist))
+    assert.equal(parsed.data.perVolume[0].sharpChapters, 1)
+    assert.equal(parsed.data.perVolume[0].maxHookRun, 2)
+    assert.ok(Array.isArray(parsed.data.perVolume[0].hookDist))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -252,7 +252,8 @@ test('CLI：逐章记录缺失退出 1，表头不符退出 1（调用方要能�
     await mkdir(join(dir, '工作'), { recursive: true })
     await writeFile(join(dir, '工作', '逐章记录.md'), '# 逐章记录\n\n| 章号 | 钩型 |\n| --- | --- |\n| 1 | 危机 |\n', 'utf8')
     assert.equal(run([dir]), 1, '表头与契约不符应退出 1，不猜列序')
-    assert.equal(run([]), 1, '缺参数应退出 1 并给用法')
+    // 缺产物目录是参数错（2），与「读不到文件」的业务失败（1）分开。
+    assert.equal(run([]), 2, '缺参数应退出 2 并给用法')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

@@ -243,6 +243,32 @@ export function humanReport(stats) {
 
 // ---------- CLI ----------
 
+const USAGE = '用法：volume-stats.mjs <产物目录> [--json] [--write-total [--dry-run]] [--help]'
+const HELP = `${USAGE}
+从 工作/逐章记录.md 算卷级派生统计：爽点章数与密度、间隔中位数、钩型分布、最大连续同型钩。
+--write-total：把每卷的爽点密度写回「故事底本/故事剧情/分卷总表.md」对应行（只改这一格）。
+--dry-run：配合 --write-total，只报告会改几处，不落盘。
+--json：stdout 只输出一个 { ok, errors, data } 对象。
+--help：输出本说明并退出。`
+
+class CliError extends Error {
+  constructor(message, code = 'E_ARGS') {
+    super(message)
+    this.code = code
+  }
+}
+
+// --json 声明后，成功与失败都只输出一个 { ok, errors, data } 对象（规范 02「接口」）。
+// data 保留原字段；非 --json 路径的默认输出保持原样。
+function emitFailure({ code, message, data = {}, exitCode = 1, json = false, withCode = true }) {
+  if (json) {
+    console.log(JSON.stringify({ ok: false, errors: [{ code, file: '', message }], data }, null, 2))
+  } else {
+    console.error(withCode ? `${code}：${message}` : message)
+  }
+  process.exitCode = exitCode
+}
+
 function parseArgs(argv) {
   const out = { dir: null, json: false, help: false, writeTotal: false, dryRun: false }
   for (let i = 0; i < argv.length; i += 1) {
@@ -251,21 +277,30 @@ function parseArgs(argv) {
     else if (a === '--write-total') out.writeTotal = true
     else if (a === '--dry-run') out.dryRun = true
     else if (a === '--help' || a === '-h') out.help = true
-    else if (a.startsWith('-')) throw new Error(`未知参数「${a}」。用法：volume-stats.mjs <产物目录> [--json] [--write-total [--dry-run]]`)
+    else if (a.startsWith('-')) throw new CliError(`未知参数「${a}」。${USAGE}`)
     else if (out.dir === null) out.dir = a
-    else throw new Error(`多余的参数「${a}」。只接受一个产物目录`)
+    else throw new CliError(`多余的参数「${a}」。只接受一个产物目录。${USAGE}`)
   }
-  if (!out.help && !out.dir) throw new Error('缺少产物目录。用法：volume-stats.mjs <产物目录> [--json]')
+  if (!out.help && !out.dir) throw new CliError(`缺少产物目录。${USAGE}`)
   return out
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2))
+  let args
+  try {
+    args = parseArgs(process.argv.slice(2))
+  } catch (error) {
+    emitFailure({
+      code: error.code ?? 'E_ARGS',
+      message: error.message,
+      exitCode: 2,
+      json: process.argv.includes('--json'),
+      withCode: false,
+    })
+    return
+  }
   if (args.help) {
-    console.log('用法：volume-stats.mjs <产物目录> [--json] [--write-total [--dry-run]]')
-    console.log('从 工作/逐章记录.md 算卷级派生统计：爽点章数与密度、间隔中位数、钩型分布、最大连续同型钩。')
-    console.log('--write-total：把每卷的爽点密度写回「故事底本/故事剧情/分卷总表.md」对应行（只改这一格）。')
-    console.log('--dry-run：配合 --write-total，只报告会改几处，不落盘。')
+    console.log(HELP)
     return
   }
 
@@ -274,8 +309,8 @@ async function main() {
   try {
     raw = await readFile(recPath, 'utf8')
   } catch {
-    console.error(`E_FILE：读不到「${recPath}」。先跑 prepare 生成骨架。`)
-    process.exit(1)
+    emitFailure({ code: 'E_FILE', message: `E_FILE：读不到「${recPath}」。先跑 prepare 生成骨架。`, json: args.json, withCode: false })
+    return
   }
 
   // 表头定位：与 write-rows 同法，不猜列序。
@@ -292,8 +327,13 @@ async function main() {
     rows.push(cells)
   })
   if (headerLine < 0) {
-    console.error('E_HEADER：未找到逐章记录表头（须与 contract 的列名逐字一致）。')
-    process.exit(1)
+    emitFailure({
+      code: 'E_HEADER',
+      message: 'E_HEADER：未找到逐章记录表头（须与 contract 的列名逐字一致）。',
+      json: args.json,
+      withCode: false,
+    })
+    return
   }
 
   // manifest 里的卷区间：有就用，没有就整本当一卷。
@@ -311,35 +351,52 @@ async function main() {
     try {
       tableText = await readFile(totalPath, 'utf8')
     } catch {
-      console.error(`E_FILE：读不到「${totalPath}」。先跑 prepare 生成骨架。`)
-      process.exit(1)
+      emitFailure({ code: 'E_FILE', message: `E_FILE：读不到「${totalPath}」。先跑 prepare 生成骨架。`, json: args.json, withCode: false })
+      return
     }
     let result
     try {
       result = writeTotalTable(tableText, stats)
     } catch (error) {
-      console.error(error.message)
-      process.exit(2)
+      emitFailure({ code: 'E_CONTRACT', message: error.message, exitCode: 2, json: args.json, withCode: false })
+      return
     }
     if (!result.headerSeen) {
-      console.error('E_HEADER：分卷总表里没找到与契约逐字一致的表头，不猜列序（猜错会把密度写进别的列）。')
-      process.exit(1)
+      emitFailure({
+        code: 'E_HEADER',
+        message: 'E_HEADER：分卷总表里没找到与契约逐字一致的表头，不猜列序（猜错会把密度写进别的列）。',
+        json: args.json,
+        withCode: false,
+      })
+      return
     }
     if (args.dryRun) {
-      console.log(`会改 ${result.changed} 处（--dry-run，未落盘）`)
+      if (args.json) {
+        console.log(JSON.stringify({ ok: true, errors: [], data: { changed: result.changed, dryRun: true } }, null, 2))
+      } else {
+        console.log(`会改 ${result.changed} 处（--dry-run，未落盘）`)
+      }
       return
     }
     // 内容没变时不写：避免把一个没改动的文件记成刚改过（mtime 会变，产物上分不出「改过」与「跑过」）。
     if (result.changed === 0) {
-      console.log('爽点密度列已是最新，无需改动')
+      if (args.json) {
+        console.log(JSON.stringify({ ok: true, errors: [], data: { changed: 0, dryRun: false } }, null, 2))
+      } else {
+        console.log('爽点密度列已是最新，无需改动')
+      }
       return
     }
     await writeFile(totalPath, result.text, 'utf8')
-    console.log(`已写入 ${result.changed} 处爽点密度（${totalPath}）`)
+    if (args.json) {
+      console.log(JSON.stringify({ ok: true, errors: [], data: { changed: result.changed, dryRun: false, path: totalPath } }, null, 2))
+    } else {
+      console.log(`已写入 ${result.changed} 处爽点密度（${totalPath}）`)
+    }
     return
   }
 
-  if (args.json) console.log(JSON.stringify(stats, null, 2))
+  if (args.json) console.log(JSON.stringify({ ok: true, errors: [], data: stats }, null, 2))
   else console.log(humanReport(stats))
 }
 

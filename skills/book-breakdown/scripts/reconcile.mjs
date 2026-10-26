@@ -132,8 +132,26 @@ export function humanTable(result) {
 
 // ---------- CLI ----------
 
-const USAGE = '用法：reconcile.mjs <报告文件> --source <小说 txt> [--json]\n' +
+const USAGE = '用法：reconcile.mjs <报告文件> --source <小说 txt> [--json] [--help]\n' +
   '      各章字数之和需要切章结果，所以必须给 --source（跑 detectChapters，与 prepare 同一口径）。'
+
+class CliError extends Error {
+  constructor(message, code = 'E_ARGS') {
+    super(message)
+    this.code = code
+  }
+}
+
+// --json 声明后，成功与失败都只输出一个 { ok, errors, data } 对象（规范 02「接口」）。
+// data 保留原字段；非 --json 路径的默认输出保持原样。
+function emitFailure({ code, message, data = {}, exitCode = 1, json = false, withCode = true }) {
+  if (json) {
+    console.log(JSON.stringify({ ok: false, errors: [{ code, file: '', message }], data }, null, 2))
+  } else {
+    console.error(withCode ? `${code}：${message}` : message)
+  }
+  process.exitCode = exitCode
+}
 
 function parseArgs(argv) {
   const out = { report: null, source: null, json: false, help: false }
@@ -143,39 +161,79 @@ function parseArgs(argv) {
     else if (a === '--help' || a === '-h') out.help = true
     else if (a === '--source') {
       out.source = argv[++i]
-      if (!out.source) throw new Error(`--source 缺少取值。\n${USAGE}`)
-    } else if (a.startsWith('-')) throw new Error(`未知参数「${a}」。\n${USAGE}`)
+      if (!out.source) throw new CliError(`--source 缺少取值。\n${USAGE}`)
+    } else if (a.startsWith('-')) throw new CliError(`未知参数「${a}」。\n${USAGE}`)
     else if (out.report === null) out.report = a
-    else throw new Error(`多余的参数「${a}」。\n${USAGE}`)
+    else throw new CliError(`多余的参数「${a}」。\n${USAGE}`)
   }
-  if (!out.help && !out.report) throw new Error(USAGE)
+  if (!out.help && !out.report) throw new CliError(USAGE)
   return out
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2))
-  if (args.help) { console.log(USAGE); return }
+  let args
+  try {
+    args = parseArgs(process.argv.slice(2))
+  } catch (error) {
+    emitFailure({
+      code: error.code ?? 'E_ARGS',
+      message: error.message,
+      exitCode: 2,
+      json: process.argv.includes('--json'),
+      withCode: false,
+    })
+    return
+  }
+  if (args.help) {
+    console.log(USAGE)
+    return
+  }
 
   if (!existsSync(args.report)) {
-    console.error(`E_FILE：读不到报告「${args.report}」。`)
-    console.error('快速模式未指定输出路径时报告只在对话里，没有文件可核——先让用户确认报告已落盘。')
-    process.exit(1)
+    emitFailure({
+      code: 'E_FILE',
+      message: `E_FILE：读不到报告「${args.report}」。\n快速模式未指定输出路径时报告只在对话里，没有文件可核——先让用户确认报告已落盘。`,
+      json: args.json,
+      withCode: false,
+    })
+    return
   }
   if (!args.source) {
-    console.error(`E_ARGS：缺 --source。各章字数之和要跑 detectChapters 才能算，不能从报告里推。\n${USAGE}`)
-    process.exit(2)
+    emitFailure({
+      code: 'E_ARGS',
+      message: `E_ARGS：缺 --source。各章字数之和要跑 detectChapters 才能算，不能从报告里推。\n${USAGE}`,
+      exitCode: 2,
+      json: args.json,
+      withCode: false,
+    })
+    return
   }
 
-  const text = await readFile(args.report, 'utf8')
+  let text
+  let src
+  try {
+    text = await readFile(args.report, 'utf8')
+    src = await readFile(args.source, 'utf8')
+  } catch (error) {
+    emitFailure({ code: 'E_FILE', message: error.message, json: args.json, withCode: false })
+    return
+  }
   const { detectChapters } = await import('./prepare.mjs')
-  const src = await readFile(args.source, 'utf8')
   const chapters = detectChapters(src)
 
   const report = parseReport(text)
   const result = reconcile(report, chapters)
-  if (args.json) console.log(JSON.stringify({ ok: result.ok, rows: result.rows }, null, 2))
-  else console.log(humanTable(result))
-  process.exit(result.ok ? 0 : 1)
+  if (args.json) {
+    // 对不上的项是「对账发现」，原样留在 data.rows 里（每行带结论），不另造错误码。
+    console.log(JSON.stringify({
+      ok: result.ok,
+      errors: [],
+      data: { rows: result.rows, totalElements: result.totalElements },
+    }, null, 2))
+  } else {
+    console.log(humanTable(result))
+  }
+  process.exitCode = result.ok ? 0 : 1
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

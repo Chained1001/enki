@@ -238,16 +238,30 @@ export async function mergeForeshadow({ root, dryRun = false }) {
 
 // ---------- CLI ----------
 
+const USAGE = '用法：node merge-foreshadow.mjs <产物目录> [--dry-run] [--json] [--help]'
+const HELP = `${USAGE}
+
+把 工作/伏笔台账-卷N.md 合并进主台账，连续重编号，并改写全产物里的伏笔引用。
+
+参数：
+  <产物目录>    含 故事底本/故事剧情/伏笔台账.md 的拆解产物目录
+  --dry-run     只报告将要做的改动，不落盘
+  --json        stdout 只输出一个 { ok, errors, data } 对象
+  --help        输出本说明并退出
+
+退出码：0 成功，1 业务失败（缺台账、增量不合法），2 参数错。`
+
 function parseArgs(argv) {
-  const out = { root: null, dryRun: false, json: false }
+  const out = { root: null, dryRun: false, json: false, help: false }
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i]
     if (a === '--dry-run') out.dryRun = true
     else if (a === '--json') out.json = true
+    else if (a === '--help' || a === '-h') out.help = true
     else if (!a.startsWith('-')) out.root = a
-    else throw new UsageError(`未知参数 ${a}。用法：node merge-foreshadow.mjs <产物目录> [--dry-run] [--json]`, 'E_ARGS')
+    else throw new UsageError(`未知参数 ${a}。${USAGE}`, 'E_ARGS')
   }
-  if (!out.root) throw new UsageError('用法：node merge-foreshadow.mjs <产物目录> [--dry-run] [--json]', 'E_ARGS')
+  if (!out.help && !out.root) throw new UsageError(USAGE, 'E_ARGS')
   return out
 }
 
@@ -262,6 +276,10 @@ async function main() {
       console.error(error.message)
     }
     process.exitCode = 2
+    return
+  }
+  if (args.help) {
+    console.log(HELP)
     return
   }
   try {

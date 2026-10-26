@@ -178,9 +178,9 @@ test('CLI：--json 报告可解析且带下界与警告字段', () => {
     const r = runScript([dir, '--report', '--json'])
     const obj = JSON.parse(r.stdout)
     assert.ok(obj.ok)
-    assert.ok(obj.下界.阶段4输入下界 > 0)
-    assert.ok(Array.isArray(obj.警告))
-    assert.ok(obj.警告.some((w) => w.startsWith('W_COST_UNDER')))
+    assert.ok(obj.data.下界.阶段4输入下界 > 0)
+    assert.ok(Array.isArray(obj.data.警告))
+    assert.ok(obj.data.警告.some((w) => w.startsWith('W_COST_UNDER')))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -212,7 +212,7 @@ test('产物字数按磁盘内容算，不按 manifest 状态算（填满后下�
   const dir = makeProduct()
   try {
     runScript([dir, '--record', '--stage', '4', '--in', '50000', '--out', '3000'])
-    const before = JSON.parse(runScript([dir, '--report', '--json']).stdout).下界.输出下界
+    const before = JSON.parse(runScript([dir, '--report', '--json']).stdout).data.下界.输出下界
 
     // 把所有骨架文件的占位换成实内容，但刻意不动 manifest.files 的状态（模拟真实漂移）
     const manifest = JSON.parse(readFileSync(join(dir, '工作', 'manifest.json'), 'utf8'))
@@ -228,7 +228,7 @@ test('产物字数按磁盘内容算，不按 manifest 状态算（填满后下�
     }
     assert.ok(filled > 5, `夹具应有多个骨架文件，实际填了 ${filled} 个`)
 
-    const after = JSON.parse(runScript([dir, '--report', '--json']).stdout).下界.输出下界
+    const after = JSON.parse(runScript([dir, '--report', '--json']).stdout).data.下界.输出下界
     assert.ok(after > before, `填满后输出下界应变大：${before} → ${after}`)
 
     // 同时确认 manifest 的状态确实没变——这正是「两套账」的样子
