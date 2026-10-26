@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
-const STANDARD = join(root, 'docs', '规范', '02-脚本与测试.md')
+const STANDARD = join(root, 'docs', '规范', '02-脚本、测试与提交.md')
 const PROJECT = join(root, 'docs', '技术', '错误码.md')
 
 // 表里有、但当前脚本确实不报的码。每条写明为什么可以不在用（而不是忘了补脚本或忘了删行）。

@@ -33,7 +33,7 @@ npx skills add Chained1001/enki
 |---|---|
 | `skills/` | 技能源码，唯一发布内容 |
 | `templates/` | 新建技能用的模板，不要删 |
-| `docs/规范/` | 开发标准（基座副本） |
+| `docs/规范/` | 开发标准（自有） |
 | `docs/产品/`、`docs/技术/` | 产品需求、运行流程与架构 |
 | `scripts/`、`test/`、`evals/` | 校验、测试、评测 |
 

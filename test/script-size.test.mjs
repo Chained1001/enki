@@ -1,4 +1,4 @@
-// 脚本规模闸（docs/规范/02-脚本与测试.md）：「单个脚本超过 1000 行或 50 个函数时，按职责拆分」。
+// 脚本规模闸（docs/规范/02-脚本、测试与提交.md）：「单个脚本超过 1000 行或 50 个函数时，按职责拆分」。
 // 数行用 readFileSync(...).split(/\r?\n/).length，不 spawn wc：Windows 没有 wc，测试也不该为此起子进程。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

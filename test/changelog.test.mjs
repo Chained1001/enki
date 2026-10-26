@@ -1,5 +1,5 @@
 // 防的漂移：CHANGELOG 的版本段日期写错、Unreleased 混进日期、条目逐字重复、新条目带句号。
-// 05-版本与发版只把规则写在文档里，没有门禁就全靠自觉；历史段（0.2.x／0.3.0）不追改。
+// 03-版本与发布只把规则写在文档里，没有门禁就全靠自觉；历史段（0.2.x／0.3.0）不追改。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'

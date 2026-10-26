@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url'
 
 const USAGE = '用法：validate.mjs [路径] [--json] [--help]'
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
-// 与 规范/03-命名.md 的保留名清单一致，改一处须同次改另一处。
+// 与 规范/01-技能与命名.md 的保留名清单一致，改一处须同次改另一处。
 const RESERVED_NAMES = new Set(['skills', 'docs', 'templates', 'scripts', 'test', 'evals', 'examples', 'node_modules'])
 // 与 规范/01 的 frontmatter 两表一致：前六个是 agentskills 规范键，后三个是宿主扩展键。
 const KNOWN_KEYS = new Set([
@@ -98,7 +98,7 @@ export function checkSkillText(dirName, text, file = `skills/${dirName}/SKILL.md
     if (name !== dirName) fail('E_NAME_MISMATCH', `name "${name}" 与目录名 "${dirName}" 不一致`)
   }
 
-  if (RESERVED_NAMES.has(dirName)) fail('E_NAME_RESERVED', `"${dirName}" 是保留名，不得用作技能目录名，见 docs/规范/03-命名.md`)
+  if (RESERVED_NAMES.has(dirName)) fail('E_NAME_RESERVED', `"${dirName}" 是保留名，不得用作技能目录名，见 docs/规范/01-技能与命名.md`)
 
   const description = fields.description ?? ''
   const descriptionLength = [...description].length

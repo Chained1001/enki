@@ -20,6 +20,7 @@
 - 模板与发布字段（P3-2、P3-4）：`templates/root/AGENTS.md` 标注为手工骨架，两条禁令同步进根 AGENTS 的「禁止事项」，`package.json` 加 `files: ["skills"]`
 - AGENTS 精简（P3-3）：真书规模断言整段移入 `test/README.md`，三段英文约定收成 `## Agent 约定` 三条指针
 - 校验器拆分（P2-3b）：`validate-output.mjs` 1202→913 行，纯函数与 CLI 拆到 `validate/` 三个模块，公开导出与行为不变
+- 规范合并（P2-1）：`docs/规范/` 由 11 份合为 6 份（00–05），旧 01／03／07 → `01-技能与命名.md`、旧 02／04 → `02-脚本、测试与提交.md`、旧 05 → `03-版本与发布.md`、旧 06／10 → `04-文档与施工.md`、旧 08 → `05-许可证与素材.md`，旧 09 归档到 `docs/研究/归档-09-项目派生.md`；新增 `test/standards-refs.test.mjs` 防旧行号与失效的规范链接
 
 ### Added
 

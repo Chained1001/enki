@@ -25,7 +25,7 @@ export const AGENTS_POINTERS = [
   { path: 'docs/adr/README.md' },
   { path: 'test/realbook-scale.test.mjs' },
   { path: 'scripts/init-skill.mjs' },
-  { path: 'docs/规范/04-提交与分支.md' },
+  { path: 'docs/规范/02-脚本、测试与提交.md' },
   { path: 'docs/规范/来源.md' },
 ]
 

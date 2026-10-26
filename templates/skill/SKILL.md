@@ -1,5 +1,5 @@
 ---
-# 可选键见 docs/规范/01-技能写法.md 的 frontmatter 表
+# 可选键见 docs/规范/01-技能与命名.md 的 frontmatter 表
 name: {{name}}
 description: {{description}}
 ---
