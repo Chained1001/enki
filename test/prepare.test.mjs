@@ -6,6 +6,7 @@ import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cnToInt, detectChapters, detectVolumes, fingerprint, prepare } from '../skills/book-breakdown/scripts/prepare.mjs'
+import { COLUMNS } from '../skills/book-breakdown/scripts/contract.mjs'
 
 const SAMPLE = `前言部分，交代背景。
 
@@ -223,17 +224,23 @@ test('卷末总结行作卷界而非卷首（绍宋形态）', async () => {
   assert.ok(vols.every((v) => v.endCh >= v.startCh), '不得出现倒挂区间')
 })
 
-test('出版书判定与降级目录（龙族形态）', async () => {
+test('出版书建卷层，幕＝原文单元（#12 行为变更：原先不建卷纲）', async () => {
   const unit = (n, name) => `第${n}幕 ${name}\n${'他说话了，声音很轻。'.repeat(2000)}\n`
   const text = unit('一', '开端') + '\n' + unit('二', '转折') + '\n' + unit('三', '收束')
   await withDir('prepare-pub', async ({ dir }) => {
     const src = await writeSample(dir, '出版书.txt', text)
     const r = await prepare({ input: src })
     assert.equal(r.bookType, '出版')
-    assert.ok(!existsSync(join(r.outDir, '故事底本', '故事剧情', '分卷总表.md')), '出版书不建分卷总表')
-    assert.ok(!existsSync(join(r.outDir, '故事底本', '故事剧情', '卷纲')), '出版书不建卷纲')
+    // 卷是结构单位，出版书也有卷（实测龙族3 检出 4 卷、龙族1/2 单卷「全书」）。
+    // 原先这两条断言的是「出版书不建分卷总表／不建卷纲」，那是被 bookType 分支砍掉的行为，已改。
+    assert.ok(existsSync(join(r.outDir, '故事底本', '故事剧情', '分卷总表.md')), '出版书也建分卷总表')
+    assert.ok(existsSync(join(r.outDir, '故事底本', '故事剧情', '卷纲')), '出版书也建卷纲目录')
+    const volFiles = (await readdir(join(r.outDir, '故事底本', '故事剧情', '卷纲'))).filter((f) => f.endsWith('.md'))
+    assert.equal(volFiles.length, r.volumes.length, '每卷一份卷纲')
+    // 幕纲＝原文单元，且文件名带所属卷号（与网文同形，校验器不必分两套树形判断）
     const acts = (await readdir(join(r.outDir, '故事底本', '故事剧情', '幕纲'))).filter((f) => f.endsWith('.md'))
     assert.equal(acts.length, 3, '出版书幕纲＝原文单元数')
+    assert.ok(acts.every((f) => /^卷\d{2}-幕\d{2}-/.test(f)), `幕纲文件名须为「卷NN-幕NN-名称.md」，实际：${acts.join('、')}`)
   })
 })
 
@@ -310,7 +317,19 @@ test('重入：不覆盖已有文件，源变更被拒，--force 归档重建', 
     const changed = await writeSample(dir, '续跑书.txt', `${SAMPLE}\n\n第四章 新\n正文\n`)
     await assert.rejects(() => prepare({ input: changed }), /源文件已变更/)
 
-    const forced = await prepare({ input: changed, force: true })
+    // --force 需要 --i-know 才算确认（B-07）：单用会报错并写明会丢多少、归档到哪
+    await assert.rejects(
+      () => prepare({ input: changed, force: true }),
+      (e) => {
+        assert.equal(e.code, 'E_FORCE_CONFIRM')
+        assert.match(e.message, /已填文件需要重做/, '消息要说清会丢多少')
+        assert.match(e.message, /归档到：/, '消息要给归档路径')
+        assert.match(e.message, /--i-know/, '消息要给出确认方式')
+        return true
+      },
+    )
+
+    const forced = await prepare({ input: changed, force: true, iKnow: true })
     assert.ok(forced.archived && forced.archived.includes('_旧1'), 'force 应归档旧目录')
     assert.ok(existsSync(forced.archived), '归档目录应存在')
     assert.equal(forced.action, 'prepared')
@@ -492,8 +511,8 @@ test('标题含竖线的章：产物表行不裂列、文件名净化（A-4）',
     const row = record.split(/\r?\n/).find((l) => l.includes('左') && l.includes('右'))
     assert.ok(row, '逐章记录应含该章行')
     assert.ok(row.includes('左\\|右'), '标题中的竖线应转义')
-    // 十一列跟进（Q-23/Q-24 跟进）：9 列→11 列；再跟进「章字数」→12 列，首尾竖线共 14 段。
-    assert.equal(row.replace(/\\\|/g, '0').split('|').length, 14, '12 列不裂列（首尾竖线共 14 段）')
+    // 列数演进：…→13 列（A-09 加爽点类型）→14 列（故事内时间）→15 列（章首句），首尾竖线共 17 段。
+    assert.equal(row.replace(/\\\|/g, '0').split('|').length, 17, '15 列不裂列（首尾竖线共 17 段）')
 
     const manifest = JSON.parse(readFileSync(join(r.outDir, '工作', 'manifest.json'), 'utf8'))
     assert.equal(manifest.chapters[0].title, '第一章 左|右', 'manifest 保留原始标题')
@@ -514,7 +533,7 @@ test('UTF-8 BOM 原文可处理：BOM 不进正文（A-4）', async () => {
 
 // ---------- 产物增强三件套（票C：Q-22，2026-10-23）----------
 
-test('逐章记录十二列：章字数紧跟标题、剧情线仍第 8 列、钩型/爽点标记接在情绪后（A-3，Q-23/Q-24 跟进）', async () => {
+test('逐章记录十五列：章字数紧跟标题、剧情线仍第 8 列、爽点强度与类型接在情绪后、故事内时间与章首句末两列（A-3，Q-23/Q-24、A-09、§2.6-8、三轮复测跟进）', async () => {
   await withDir('prepare-q23-col', async ({ dir }) => {
     const src = await writeSample(dir, '十一列书.txt', SAMPLE)
     const r = await prepare({ input: src })
@@ -523,17 +542,20 @@ test('逐章记录十二列：章字数紧跟标题、剧情线仍第 8 列、�
     const header = lines.find((l) => l.startsWith('| 全局章号'))
     assert.ok(header, '应含表头行')
     const cols = header.slice(1, -1).split('|').map((c) => c.trim())
-    assert.equal(cols.length, 12, '表头十二列')
+    assert.equal(cols.length, 15, '表头十五列')
     assert.equal(cols[2], '章字数', '章字数紧跟标题（脚本填，不由 agent 判断）')
     assert.equal(cols[6], '一句话事件', '剧情线插在「一句话事件」后')
     assert.equal(cols[7], '剧情线')
     assert.equal(cols[8], '伏笔埋/收', '「伏笔埋/收」仍在剧情线后')
     assert.equal(cols[10], '章末钩型', '章末钩型接在情绪后（Q-23）')
-    assert.equal(cols[11], '爽点标记', '爽点标记为末列（Q-23）')
+    assert.equal(cols[11], '爽点强度', '爽点强度接在钩型后（A-09 正名，原「爽点标记」）')
+    assert.equal(cols[12], '爽点类型', '爽点类型在故事内时间前（A-09：只有强度统计不出「哪种爽点反复用」）')
+    assert.equal(cols[13], '故事内时间', '故事内时间在章首句前（§2.6 第 8 项：卷级时间跨度看不出「过了多久」）')
+    assert.equal(cols[14], '章首句', '章首句为末列（三轮复测：开场方式唯一整项崩掉，别的列覆盖不到）')
     const dataRows = lines.filter((l) => /^\| \d/.test(l))
     assert.equal(dataRows.length, 4, '行数＝章节数（含前言）')
     for (const row of dataRows) {
-      assert.equal(row.slice(1, -1).split('|').length, 12, `每行 12 格：${row.slice(0, 30)}`)
+      assert.equal(row.slice(1, -1).split('|').length, 15, `每行 15 格：${row.slice(0, 30)}`)
     }
   })
 })
@@ -546,7 +568,7 @@ test('合成书骨架：总表 15 列表头、大纲含「## 故事设计」且�
     const table = readFileSync(join(r.outDir, '故事底本', '故事剧情', '分卷总表.md'), 'utf8')
     const header = table.split(/\r?\n/).find((l) => l.startsWith('| 卷 |'))
     assert.ok(header, '分卷总表应含表头行')
-    assert.equal(header.slice(1, -1).split('|').length, 15, '分卷总表 15 列')
+    assert.equal(header.slice(1, -1).split('|').length, COLUMNS['分卷总表'].length, '分卷总表列数与契约一致')
     // 大纲四块，第一块故事设计七项引导
     const outline = readFileSync(join(r.outDir, '故事底本', '故事剧情', '全书大纲.md'), 'utf8')
     assert.ok(outline.includes('## 故事设计'), '全书大纲骨架应含「## 故事设计」')
@@ -585,7 +607,40 @@ test('指纹扩容计数：场景切换只认行首标记、情绪标签词全�
   assert.equal(fp.base.场景切换密度, +(3 / 35 * 10000).toFixed(1))
   assert.equal(fp.base.情绪标签词密度, +(1 / 35 * 10000).toFixed(1))
   assert.deepEqual(Object.keys(fp.base), ['句均长', '短句比', '对话占比', '了密度', '疲劳词密度', '场景切换密度', '情绪标签词密度'], 'base 七项')
-  assert.ok(fp.deviating.场景切换密度.length === 3 && fp.deviating.情绪标签词密度.length === 3, '新增两项各有偏离章 top3')
+  // A-07：3 章是最小可算样本（模板口径「样本不足 3 章」），所以这里算出「无偏离章」，
+  // 而不是固定取三个「相对最偏离」的章。原先这条断言的是 length === 3——
+  // 3 章样本下 top-3 就是全部三章，等于把每一章都标成偏离。
+  assert.deepEqual(fp.deviating.场景切换密度, ['无偏离章（均在 2σ 以内）'], '3 章算出的是「无偏离」，不是全部三章')
+  assert.deepEqual(fp.deviating.情绪标签词密度, ['无偏离章（均在 2σ 以内）'], '两项都该同样处理，不能只改一项')
+})
+
+// A-07 的核心：不满 3 章时不出偏离结论。
+test('指纹偏离判定：不足 3 章标样本不足，不编偏离章（A-07）', () => {
+  const text = ['第一章 一', '次日，张三启程。', '', '第二章 二', '清晨，李四赶到。', ''].join('\n')
+  const fp = fingerprint(detectChapters(text))
+  assert.match(fp.deviating.句均长[0], /样本不足/, '2 章算不出标准差，必须写明而不是给结论')
+  assert.match(fp.deviating.句均长[0], /2 章/, '要把实际章数写出来，否则读者不知道差多少')
+})
+
+// A-07 的另一半：真偏离才列，且标出 σ 值。
+// 造一本 5 章的书，前四章全是短句、第 5 章全是长句，应只有第 5 章被列出。
+test('指纹偏离判定：只列真正 ≥2σ 的章，并写出 σ 值（A-07）', () => {
+  // 句均长不受「写多少字」影响，只受句子长短影响——所以要用句长造差异，
+  // 不能靠重复短句把第五章堆长（那样句均长不变，造不出偏离）。
+  const short = '他走了。天黑了。'
+  const long = '他沿着那条早已被荒草盖住的旧路一直向北走去，直到再也看不见身后的城。'
+  const text = [
+    '第一章 一', short.repeat(3), '',
+    '第二章 二', short.repeat(3), '',
+    '第三章 三', short.repeat(3), '',
+    '第四章 四', short.repeat(3), '',
+    '第五章 五', long.repeat(3), '',
+  ].join('\n')
+  const fp = fingerprint(detectChapters(text))
+  const shown = fp.deviating.句均长
+  assert.equal(shown.length, 1, `只该有第 5 章偏离，实际：${shown.join('、')}`)
+  assert.match(shown[0], /第5章/, '偏离的是那个真正超长的章')
+  assert.match(shown[0], /σ/, '要写出偏离多少个 σ，否则读者无法判断偏离有多强')
 })
 
 test('prepare 返回批数＝manifest 批数（「规模预告」行的数据源，A-5 前置单测）', async () => {

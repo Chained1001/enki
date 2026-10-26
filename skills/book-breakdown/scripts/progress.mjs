@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url'
 import { ENUMS } from './contract.mjs'
 import { IoError, readManifest, writeFileAtomic } from './io.mjs'
 
-const USAGE = '用法：progress.mjs <产物目录> [--batch-done 卷号:批号]... [--stage 阶段号:状态]... [--json] [--help]'
+const USAGE = '用法：progress.mjs <产物目录> [--batch-done 卷号:批号]... [--stage 阶段号:状态]... [--file 相对路径:状态]... [--file-state 相对路径]... [--repair-round 轮次:说明]... [--resync-files] [--json] [--help]'
 
 export class UsageError extends Error {
   constructor(message, code = 'E_PROGRESS') { super(message); this.code = code }
@@ -37,10 +37,48 @@ export function queryProgress(manifest) {
     bookType: manifest.bookType,
     stages: manifest.stages ?? [],
     batches: { done: done.length, total: batches.length, failed: batches.filter((b) => b.status === 'failed').length },
+    // 文件状态一起给出（C-24）：流程里「回填前先看这个文件填没填」需要它。
+    // 没这个字段时，唯一的读法是让 agent 自己去翻 manifest.json——
+    // 那等于把脚本该做的事推回给模型，还多一次读。
+    files: manifest.files ?? {},
+    // 修复轮次（C-15）：10 的「三轮停止」要靠它，重跑时不能从 1 重新数。
+    repairs: manifest.repairs ?? [],
   }
 }
 
-export async function updateProgress({ root, batchDone = [], stage = [] }) {
+// 骨架态判据与 validate-output.mjs 保持一致：正文里还有没有「还没填」的证据。
+// 不一致会让「按内容判定」出现两套结果——一处说填好了，另一处说还是骨架。
+// 这里刻意不复用 validate-output 的内部函数：那是个校验器，progress 只是改状态，
+// 为了一个判据把整个校验器拖进来不划算；两处判据由测试对齐（test/progress-file.test.mjs）。
+function firstTable(text) {
+  const lines = text.split(/\r?\n/)
+  let header = null
+  const rows = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]?.trim() ?? ''
+    if (!line.startsWith('|') || !line.endsWith('|')) continue
+    const cells = line.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim())
+    if (cells.length < 2) continue
+    if (cells.every((c) => /^[-: ]*$/.test(c))) continue // 分隔行
+    if (header === null) { header = cells; continue }
+    rows.push(cells)
+  }
+  return header ? { header, rows } : null
+}
+
+// 由文件内容判定状态：filled 或 skeleton。纯表格产物（索引/台账/词典）没有「（待填）」字样，
+// 只按占位判会把空表当成已填，所以再看「表头齐了但零数据行」。
+export function detectFileState(text, rel = '') {
+  const body = text.replace(/^>.*$/gm, '')
+  if (body.includes('（待填）')) return 'skeleton'
+  if (rel.endsWith('.md')) {
+    const table = firstTable(body)
+    if (table && !/^## /m.test(body) && table.rows.length === 0) return 'skeleton'
+  }
+  return 'filled'
+}
+
+export async function updateProgress({ root, batchDone = [], stage = [], file = [], repairRound = [] }) {
   root = resolve(root)
   const manifestPath = join(root, '工作', 'manifest.json')
   if (!existsSync(manifestPath)) throw new UsageError('产物目录缺少 manifest，请先运行 prepare', 'E_MANIFEST')
@@ -48,6 +86,8 @@ export async function updateProgress({ root, batchDone = [], stage = [] }) {
   const mtimeMs = statSync(manifestPath).mtimeMs // 评审 P7：记录读取时刻的 mtime，写盘前复核
   manifest.batches ??= []
   manifest.stages ??= []
+  manifest.files ??= {}
+  manifest.repairs ??= []
 
   for (const key of batchDone) {
     const m = /^(\d+):(\d+)$/.exec(key)
@@ -64,8 +104,49 @@ export async function updateProgress({ root, batchDone = [], stage = [] }) {
     if (!ENUMS.阶段状态.includes(m[2])) throw new UsageError(`状态「${m[2]}」不在枚举内：${ENUMS.阶段状态.join('、')}`, 'E_STAGE')
     item.status = m[2]
   }
+  // 文件状态写入（B-06）：此前 manifest.files 只在 prepare 时写一次，之后没有任何写入口，
+  // 于是它必然过期。这里给一个稳定的入口，路径须是产物根相对路径，且文件必须真实存在——
+  // 允许给不存在的文件记状态，等于又造一套「说与做不一致」的账。
+  for (const key of file) {
+    const sep = key.lastIndexOf(':')
+    if (sep <= 0) throw new UsageError(`--file 取值「${key}」应为 相对路径:状态，如 故事底本/文风.md:filled`, 'E_ARGS')
+    const rel = key.slice(0, sep).replace(/\\/g, '/')
+    const want = key.slice(sep + 1)
+    if (!ENUMS.文件状态.includes(want)) {
+      throw new UsageError(`文件状态「${want}」不在枚举内：${ENUMS.文件状态.join('、')}`, 'E_ARGS')
+    }
+    if (rel.startsWith('/') || rel.includes('..')) {
+      throw new UsageError(`--file 的路径必须是产物根下的相对路径，不接受「${rel}」`, 'E_ARGS')
+    }
+    const full = join(root, rel)
+    if (!existsSync(full)) throw new UsageError(`文件不存在：${rel}`, 'E_FILE')
+    manifest.files[rel] = want
+  }
 
-  const changed = batchDone.length + stage.length > 0
+  // 修复轮次落盘（C-15）：10 的停止条件是「同一错误修复三轮仍未通过就停」，
+  // 但轮次此前只活在对话里——重跑一次又从头数，于是「三轮」这个上限实际上不存在：
+  // 中断一次就永久重置，可以无限修下去。
+  //
+  // 记的是「第几轮、这一轮修了什么」，不是单纯的计数器：重跑时要知道上一轮改过哪些文件，
+  // 才不会把同一个改法再试一遍。
+  for (const key of repairRound) {
+    const sep = key.indexOf(':')
+    if (sep <= 0) {
+      throw new UsageError(`--repair-round 取值「${key}」应为 轮次:说明，如 1:E_SOURCE 出处补齐`, 'E_ARGS')
+    }
+    const n = Number(key.slice(0, sep))
+    const note = key.slice(sep + 1).trim()
+    if (!Number.isInteger(n) || n < 1) throw new UsageError(`--repair-round 的轮次应为正整数，收到「${key.slice(0, sep)}」`, 'E_ARGS')
+    if (!note) throw new UsageError('--repair-round 的说明不能为空：重跑时要靠它知道上一轮改了什么', 'E_ARGS')
+    // 同一轮重复登记时覆盖而不是追加：重跑同一轮是很常见的，
+    // 追加会让轮次虚高，三轮上限就提前触发。
+    const exist = manifest.repairs.find((r) => r.round === n)
+    if (exist) exist.note = note
+    else manifest.repairs.push({ round: n, note })
+    manifest.repairs.sort((a, b) => a.round - b.round)
+  }
+
+  const changed = batchDone.length + stage.length + file.length + repairRound.length > 0
   if (changed) {
     assertManifestUnchanged(manifestPath, mtimeMs) // 评审 P7：并发写/外部手改 → E_CONFLICT，不覆盖
     await writeFileAtomic(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
@@ -73,8 +154,37 @@ export async function updateProgress({ root, batchDone = [], stage = [] }) {
   return { changed, progress: queryProgress(manifest) }
 }
 
+// 续跑时按内容重判全部文件状态（B-06）：照抄上次记录的标签没有意义——
+// 那份标签正是会过期的东西。只重判已登记的文件；新文件由 prepare/流程自己登记。
+export async function resyncFileStates({ root }) {
+  root = resolve(root)
+  const manifestPath = join(root, '工作', 'manifest.json')
+  if (!existsSync(manifestPath)) throw new UsageError('产物目录缺少 manifest，请先运行 prepare', 'E_MANIFEST')
+  const manifest = await readManifest(root)
+  const mtimeMs = statSync(manifestPath).mtimeMs
+  manifest.files ??= {}
+  let changed = 0
+  for (const rel of Object.keys(manifest.files)) {
+    if (rel.startsWith('原文/') || rel === '工作/manifest.json') continue
+    const full = join(root, rel)
+    if (!existsSync(full)) continue
+    const want = detectFileState(await readFile(full, 'utf8'), rel)
+    // 已经人工标成 validated/failed 的不覆盖：那是流程的判断，不是内容能推出来的。
+    if (manifest.files[rel] === 'validated' || manifest.files[rel] === 'failed') continue
+    if (manifest.files[rel] !== want) {
+      manifest.files[rel] = want
+      changed += 1
+    }
+  }
+  if (changed) {
+    assertManifestUnchanged(manifestPath, mtimeMs)
+    await writeFileAtomic(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+  }
+  return { changed, progress: queryProgress(manifest) }
+}
+
 export function parseArgs(argv) {
-  const options = { root: undefined, batchDone: [], stage: [], json: false, help: false }
+  const options = { root: undefined, batchDone: [], stage: [], file: [], fileState: [], repairRound: [], resync: false, json: false, help: false }
   let i = 0
   const valueOf = (flag) => {
     const v = argv[++i]
@@ -85,6 +195,10 @@ export function parseArgs(argv) {
     const arg = argv[i]
     if (arg === '--batch-done') options.batchDone.push(valueOf('--batch-done'))
     else if (arg === '--stage') options.stage.push(valueOf('--stage'))
+    else if (arg === '--file') options.file.push(valueOf('--file'))
+    else if (arg === '--file-state') options.fileState.push(valueOf('--file-state'))
+    else if (arg === '--repair-round') options.repairRound.push(valueOf('--repair-round'))
+    else if (arg === '--resync-files') options.resync = true
     else if (arg === '--json') options.json = true
     else if (arg === '--help' || arg === '-h') options.help = true
     else if (arg.startsWith('--')) throw new UsageError(`未知参数 ${arg}。${USAGE}`, 'E_ARGS')
@@ -113,7 +227,9 @@ async function main() {
     return
   }
   try {
-    const { changed, progress } = await updateProgress(options)
+    const { changed, progress } = options.resync
+      ? await resyncFileStates(options)
+      : await updateProgress(options)
     if (options.json) {
       console.log(JSON.stringify({ ok: true, errors: [], data: { changed, ...progress } }, null, 2))
     } else {
@@ -121,6 +237,16 @@ async function main() {
       console.log(`进度：${progress.book}（${progress.bookType}）`)
       console.log(`批次：${progress.batches.done}/${progress.batches.total} 完成${progress.batches.failed ? `，${progress.batches.failed} 失败` : ''}`)
       console.log(`当前阶段：${stage ? `${stage.id} ${stage.name}（${stage.status}）` : '全部完成'}`)
+      // 修复轮次（C-15）：写上轮次与说明，让人一眼看到「还剩几轮」。
+      if (progress.repairs.length) {
+        console.log(`修复轮次：${progress.repairs.length} 轮（上限 3，超出应停下等用户裁决）`)
+        for (const r of progress.repairs) console.log(`  第${r.round}轮：${r.note}`)
+      }
+      // 文件状态（C-24）：只印被问到的那些，不把几十个文件的清单刷屏。
+      for (const rel of options.fileState) {
+        const state = progress.files[rel.replace(/\\/g, '/')]
+        console.log(`${rel}：${state ?? '未登记（manifest 里没有这个路径）'}`)
+      }
     }
   } catch (error) {
     if (options.json) {

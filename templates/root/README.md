@@ -28,7 +28,7 @@ npx skills add {{owner}}/{{repo}}
 |---|---|---|
 | TODO：与技能目录名一致 | TODO：与 description 语义一致，不照抄 | 无 |
 
-扩展键只填实际用到的，没有就写「无」，多个用逗号分隔。可填哪些键见 `docs/规范/01-技能写法.md` 的 frontmatter 表。表与 `skills/` 目录的一致性由 `npm run validate` 检查。
+扩展键只填实际用到的，没有就写「无」，多个用逗号分隔。可填哪些键见 `docs/规范/01-技能与命名.md` 的 frontmatter 表。表与 `skills/` 目录的一致性由 `npm run validate` 检查。
 
 ## 目录
 

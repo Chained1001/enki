@@ -7,12 +7,12 @@
 // 凡需要写盘的操作一律在临时副本上做，绝不改仓库里的夹具。
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { closeSync, cpSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { closeSync, cpSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { lowerBound, mergeCost, parseAmount } from '../skills/book-breakdown/scripts/cost.mjs'
+import { lowerBound, mergeCost, parseAmount, recordCost } from '../skills/book-breakdown/scripts/cost.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
@@ -178,23 +178,185 @@ test('CLI：--json 报告可解析且带下界与警告字段', () => {
     const r = runScript([dir, '--report', '--json'])
     const obj = JSON.parse(r.stdout)
     assert.ok(obj.ok)
-    assert.ok(obj.下界.阶段4输入下界 > 0)
-    assert.ok(Array.isArray(obj.警告))
-    assert.ok(obj.警告.some((w) => w.startsWith('W_COST_UNDER')))
+    assert.ok(obj.data.下界.阶段4输入下界 > 0)
+    assert.ok(Array.isArray(obj.data.警告))
+    assert.ok(obj.data.警告.some((w) => w.startsWith('W_COST_UNDER')))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 })
 
-test('CLI：记录只写 manifest 的 cost 键，不新增产物文件（工作/ 仍只有三个）', () => {
+// 记成本只改 manifest，不落任何新文件。
+// 断言从「工作/ 只有三个文件」改成「工作/ 顶层的常驻文件不变」——
+// 因为 C-09 之后 工作/增量/ 是合法的过程目录。但「顶层三个常驻文件没被动过」仍然有意义：
+// 若有实现把成本写成 工作/cost.json 这类旁路文件，这条会红。
+test('CLI：记录只写 manifest 的 cost 键，不在 工作/ 顶层新增文件', () => {
   const dir = makeProduct()
   try {
+    const before = readdirSync(join(dir, '工作')).sort()
     runScript([dir, '--record', '--stage', '4', '--in', '1000', '--out', '100'])
     const manifestText = readFileSync(join(dir, '工作', 'manifest.json'), 'utf8')
     assert.match(manifestText, /"cost"/)
-    // 工作/ 目录内容不变：manifest.json、别名词典.md、逐章记录.md
-    const workFiles = readdirSync(join(dir, '工作')).sort()
-    assert.deepEqual(workFiles, ['manifest.json', '别名词典.md', '逐章记录.md'].sort())
+    // 顶层常驻文件不变：manifest.json、别名词典.md、逐章记录.md
+    assert.deepEqual(readdirSync(join(dir, '工作')).sort(), before, '记录成本不该在 工作/ 顶层新增或删除文件')
+    assert.deepEqual(before, ['manifest.json', '别名词典.md', '逐章记录.md'].sort())
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// 产物字数统计不再相信 manifest.files 的状态标签（B-06 的连带修复）。
+// 那个标签在 prepare 时写死、之后没人更新，按它过滤会让「填满的文件仍标 skeleton」
+// 被静默跳过，输出下界系统性偏低。这里用「把占位换成实内容」制造正是那种情形。
+test('产物字数按磁盘内容算，不按 manifest 状态算（填满后下界必须变大）', () => {
+  const dir = makeProduct()
+  try {
+    runScript([dir, '--record', '--stage', '4', '--in', '50000', '--out', '3000'])
+    const before = JSON.parse(runScript([dir, '--report', '--json']).stdout).data.下界.输出下界
+
+    // 把所有骨架文件的占位换成实内容，但刻意不动 manifest.files 的状态（模拟真实漂移）
+    const manifest = JSON.parse(readFileSync(join(dir, '工作', 'manifest.json'), 'utf8'))
+    let filled = 0
+    for (const rel of Object.keys(manifest.files)) {
+      if (rel.startsWith('原文/')) continue
+      const p = join(dir, rel)
+      let t
+      try { t = readFileSync(p, 'utf8') } catch { continue }
+      if (!t.includes('（待填）')) continue
+      writeFileSync(p, t.replace(/（待填）/g, '这里是填好的真实内容，约二十字左右的说明文字。'), 'utf8')
+      filled += 1
+    }
+    assert.ok(filled > 5, `夹具应有多个骨架文件，实际填了 ${filled} 个`)
+
+    const after = JSON.parse(runScript([dir, '--report', '--json']).stdout).data.下界.输出下界
+    assert.ok(after > before, `填满后输出下界应变大：${before} → ${after}`)
+
+    // 同时确认 manifest 的状态确实没变——这正是「两套账」的样子
+    const after2 = JSON.parse(readFileSync(join(dir, '工作', 'manifest.json'), 'utf8'))
+    assert.equal(after2.files['故事底本/全书设定/世界观.md'], 'skeleton', '夹具前提：状态标签仍写着 skeleton')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ---------- C-08：读-改-写窗口的并发保护 ----------
+//
+// 真问题不是「理论上不优雅」，是会让已完成的批状态静默回退：
+// cost --record 与 progress --file 并发时，后写的那个用自己手里的旧 manifest 整体覆盖，
+// 前者刚写的 status=done / files[...]=filled 就没了，而且没有任何报错——
+// 人只会看到「明明标完了，回头又变回 skeleton」。
+
+test('C-08：读到写之间 manifest 被改 → 重读重试，不覆盖并发写入的批状态', async () => {
+  const dir = makeProduct()
+  try {
+    // 模拟：我们在读到写之间，另一个进程（progress）把第 1 批标成了 done。
+    // 修复前这里会被 cost 的整文件覆盖抹掉。
+    const r = await recordCost({
+      root: dir,
+      stage: 4,
+      input: 1000,
+      output: 200,
+      beforeWrite: async ({ attempt }) => {
+        if (attempt !== 1) return // 只在第一次模拟并发，第二次应正常写盘
+        const p = join(dir, '工作', 'manifest.json')
+        const m = JSON.parse(readFileSync(p, 'utf8'))
+        m.batches ??= []
+        if (!m.batches.length) m.batches.push({ volume: 1, batch: 1, status: 'skeleton' })
+        m.batches[0].status = 'done'
+        writeFileSync(p, JSON.stringify(m, null, 2), 'utf8')
+      },
+    })
+    assert.equal(r.ok, true, '一次冲突后应重试成功，不该直接失败')
+    assert.equal(r.attempts, 2, '应在第 2 次尝试写成')
+    const after = JSON.parse(readFileSync(join(dir, '工作', 'manifest.json'), 'utf8'))
+    assert.equal(after.batches?.[0]?.status, 'done', '并发写入的批状态必须保住，不能被旧副本覆盖')
+    assert.equal(after.cost?.stages?.['4']?.in, 1000, '本次成本也要记上，不能因为重试就丢掉')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('C-08：每次写前都被改 → 3 次后放弃并报 E_CONFLICT，不静默写坏', async () => {
+  const dir = makeProduct()
+  try {
+    const r = await recordCost({
+      root: dir,
+      stage: 4,
+      input: 1000,
+      output: 200,
+      beforeWrite: async () => {
+        // 每次都改：模拟持续有并发写
+        const p = join(dir, '工作', 'manifest.json')
+        const m = JSON.parse(readFileSync(p, 'utf8'))
+        m.book = typeof m.book === 'object' ? m.book : { title: m.book }
+        m.book.title = String(m.book.title ?? '') + 'x'
+        writeFileSync(p, JSON.stringify(m, null, 2), 'utf8')
+      },
+    })
+    assert.equal(r.ok, false, '一直冲突时必须放弃，不能硬写')
+    assert.match(r.message, /E_CONFLICT/, '要报 E_CONFLICT，让人知道发生了什么')
+    assert.match(r.message, /重试/, '要告诉人怎么办')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('C-08：无并发时一次写成，不因为加了保护而多读多写', async () => {
+  const dir = makeProduct()
+  try {
+    const r = await recordCost({ root: dir, stage: 4, input: 500, output: 100 })
+    assert.equal(r.ok, true)
+    assert.equal(r.attempts, 1, '没有冲突就该一次写成——保护不该变成常态重试')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('C-08：累加语义在重试后仍然正确（不会把同一次上报算两遍）', async () => {
+  const dir = makeProduct()
+  try {
+    const r = await recordCost({
+      root: dir,
+      stage: 4,
+      input: 300,
+      output: 50,
+      beforeWrite: async ({ attempt }) => {
+        if (attempt !== 1) return
+        const p = join(dir, '工作', 'manifest.json')
+        const m = JSON.parse(readFileSync(p, 'utf8'))
+        m.batches = [{ volume: 1, batch: 1, status: 'done' }]
+        writeFileSync(p, JSON.stringify(m, null, 2), 'utf8')
+      },
+    })
+    assert.equal(r.ok, true)
+    const after = JSON.parse(readFileSync(join(dir, '工作', 'manifest.json'), 'utf8'))
+    assert.equal(after.cost.stages['4'].in, 300, '重试后累加值必须正好是 300，不能变成 600')
+    assert.equal(after.cost.stages['4'].calls, 1, '调用次数也不能翻倍')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('C-08：重试上限有限且不多——冲突是异常，不能变成死循环', async () => {
+  const dir = makeProduct()
+  let calls = 0
+  try {
+    const r = await recordCost({
+      root: dir,
+      stage: 4,
+      input: 100,
+      output: 10,
+      beforeWrite: async () => {
+        calls += 1
+        const p = join(dir, '工作', 'manifest.json')
+        const m = JSON.parse(readFileSync(p, 'utf8'))
+        m.note = String(calls)
+        writeFileSync(p, JSON.stringify(m, null, 2), 'utf8')
+      },
+    })
+    assert.equal(r.ok, false, '持续冲突必须放弃')
+    assert.ok(calls <= 5, `重试次数必须有限且不多，实际试了 ${calls} 次——上限改成 99 就会卡死在这里`)
+    assert.ok(calls >= 2, '至少要重试一次，否则保护等于没做')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

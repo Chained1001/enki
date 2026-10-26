@@ -227,7 +227,7 @@ async function main() {
     // 未知错误（如 EACCES/ENOTDIR 等底层 IO 失败）不再误标 E_EXISTS，统一报 E_IO。
     const code = error instanceof TemplateError ? 'E_TEMPLATE' : error instanceof ExistsError ? 'E_EXISTS' : 'E_IO'
     if (options.json) {
-      console.log(JSON.stringify({ ok: false, errors: [{ code, message: error.message }], data: {} }, null, 2))
+      console.log(JSON.stringify({ ok: false, errors: [{ code, file: '', message: error.message }], data: {} }, null, 2))
     } else {
       console.error(error.message)
     }

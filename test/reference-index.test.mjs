@@ -35,11 +35,19 @@ test('切节：行数等于 止-起+1，字符数非零', () => {
 
 test('索引与磁盘上的 索引.md 完全一致（防止改动正文后忘记重生成）', async () => {
   const { readdir } = await import('node:fs/promises')
-  const names = (await readdir(refDir)).filter((f) => f.endsWith('.md') && f !== '索引.md')
+  // 递归收集：references/ 下已有 判据/ 与 解读/ 两个子目录（#22）。
+  // 只扫一层会让拆出去的文件整个不出现在索引里，而索引看起来仍然「一致」。
   const files = []
-  for (const name of names.sort()) {
-    files.push({ name, text: await readFile(join(refDir, name), 'utf8') })
+  async function walk(dir, prefix) {
+    for (const ent of await readdir(dir, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${ent.name}` : ent.name
+      if (ent.isDirectory()) { await walk(join(dir, ent.name), rel); continue }
+      if (!ent.name.endsWith('.md') || ent.name === '索引.md') continue
+      files.push({ name: rel, text: await readFile(join(dir, ent.name), 'utf8') })
+    }
   }
+  await walk(refDir, '')
+  files.sort((x, y) => x.name.localeCompare(y.name, 'zh'))
   const expected = buildIndex(files)
   const actual = await readFile(join(refDir, '索引.md'), 'utf8')
   assert.equal(
@@ -50,7 +58,10 @@ test('索引与磁盘上的 索引.md 完全一致（防止改动正文后忘记
 })
 
 test('索引里列出的行范围确实指向该小节标题（抽查最大的两个文件）', async () => {
-  for (const name of ['人物提炼策略.md', '设定提炼策略.md']) {
+  // #22 拆层后
+  // 「人物提炼策略」拆成了 判据/人物提炼判据.md（6.3k）与 解读/人物提炼解读.md（15.6k），
+  // 后者成为 references 下最大的一份，正是最该抽查行范围的对象。
+  for (const name of ['解读/人物提炼解读.md', '设定提炼策略.md']) {
     const text = await readFile(join(refDir, name), 'utf8')
     const lines = text.split(/\r?\n/)
     for (const s of sliceSections(text)) {
@@ -61,6 +72,41 @@ test('索引里列出的行范围确实指向该小节标题（抽查最大的�
       )
     }
   }
+})
+
+// M-12 回归：末节的「止」曾比真实末行多 1。
+// 根因是 split(/\r?\n/) 在文件末尾留一个空元素，末节没有「下一个小标题」可减一，
+// 于是按索引翻文件会多读一个空行。这条断言锁住「止不能越过真实末行」。
+test('切节：每节的止行不超过真实末行，且末节止行就是最后一个非空行', async () => {
+  for (const name of ['判据/人物提炼判据.md', '解读/人物提炼解读.md', '设定提炼策略.md', '幕与节奏策略.md', '拆解总策略.md']) {
+    const text = await readFile(join(refDir, name), 'utf8')
+    const lines = text.split(/\r?\n/)
+    // 真实末行（1 基）= 最后一个非空行的行号
+    let last = lines.length
+    while (last > 0 && lines[last - 1].trim() === '') last -= 1
+    const secs = sliceSections(text)
+    assert.ok(secs.length > 0, `${name} 应有小节`)
+    for (const s of secs) {
+      assert.ok(s.止 <= last, `${name} 的节「${s.节}」止行 ${s.止} 越过了真实末行 ${last}`)
+      assert.ok(s.止 >= s.起, `${name} 的节「${s.节}」止行 ${s.止} 小于起行 ${s.起}`)
+    }
+    const final = secs.at(-1)
+    assert.equal(
+      final.止,
+      last,
+      `${name} 的末节「${final.节}」止行应为真实末行 ${last}，实际 ${final.止}（多/少算会使按索引读取越界）`,
+    )
+    // 行数口径也要与起止一致
+    for (const s of secs) assert.equal(s.行数, s.止 - s.起 + 1, `${name} 的节「${s.节}」行数与起止不符`)
+  }
+})
+
+test('切节：带尾部空行的文本不会被算进末节', () => {
+  const text = '## 一\n内容\n\n## 二\n内容二\n\n\n'
+  const secs = sliceSections(text)
+  assert.equal(secs.length, 2)
+  // 末节止行不能吃掉末尾的两个空行
+  assert.equal(secs[1].止, 5, '末节止行应为「内容二」所在行，不含尾部空行')
 })
 
 test('索引声明了「由脚本生成」，且不含按字节错算的旧数字', async () => {

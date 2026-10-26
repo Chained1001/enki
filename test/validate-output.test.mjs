@@ -1,12 +1,13 @@
 // 防的漂移：validate-output.mjs 的校验项与 PRD 验收标准（A-04~A-22 可脚本部分）脱节。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { prepare } from '../skills/book-breakdown/scripts/prepare.mjs'
-import { findLineGaps, validateOutput } from '../skills/book-breakdown/scripts/validate-output.mjs'
+import { CARD_FIELDS, findLineGaps, validateOutput } from '../skills/book-breakdown/scripts/validate-output.mjs'
 import { SECTIONS, tableColumns } from '../skills/book-breakdown/scripts/contract.mjs'
 
 const NOVEL = [
@@ -17,7 +18,9 @@ const NOVEL = [
   '第五章 归途', '各自归途。', '',
 ].join('\n')
 
-const quote = '（第 1 章：「你好。」）'
+// 引句要带具体名词（T18 的 W_QUOTE_WEAK 闸门）：夹具代表「填得好的产物」，
+// 「你好。」这类换个书名照样成立的句子正是闸门要挑的，不能拿它当填充。
+const quote = '（第 1 章：「张三，把刀放下。」）'
 const line = (text) => `- ${text}${quote}`
 
 function tableFile(name, columnsKey, rows) {
@@ -112,12 +115,45 @@ async function makeFilledProduct() {
   for (const f of ['人物卡', '成长轨迹', '身份与马甲', '目标与动机链', '关系与阵营']) {
     await writeRel(`故事底本/全书设定/人物/主角/张三/${f}.md`, `# 张三 ${f}\n\n${line(`张三·${f}`)}\n`)
   }
-  await writeRel('故事底本/全书设定/人物/主要配角/李四.md', `# 李四\n\n${line('李四是挚友')}\n`)
-  await writeRel('故事底本/全书设定/人物/次要角色/王五.md', `# 王五\n\n${line('王五路人')}\n`)
-  await writeRel('故事底本/全书设定/势力与组织/门派/青云门.md', `# 青云门\n\n${line('青云门是门派')}\n`)
-  await writeRel('故事底本/全书设定/地点/城市与场所/车站.md', `# 车站\n\n${line('相遇之地')}\n`)
-  await writeRel('故事底本/全书设定/物品/武器/铁剑.md', `# 铁剑\n\n${line('李四的剑')}\n`)
-  await writeRel('故事底本/全书设定/概念/事件/初遇.md', `# 初遇\n\n${line('初遇事件')}\n`)
+  // 卡片按模板字段逐条填写（T9）：validate-output 现在查卡片字段标签的存在性与非空，
+  // 单行「- 一句话」的卡会被 E_CARD_FIELD 拦下——这正是要防的那种空卡。
+  const card = (title, fields) =>
+    `# ${title}\n\n` + fields.map(([label, value]) => `- ${label}：${value}`).join('\n') + '\n'
+  const v = (text) => `${text}${quote}`
+  await writeRel('故事底本/全书设定/人物/主要配角/李四.md', card('李四', [
+    ['姓名（主名）', '李四'], ['别称与马甲', '四哥'], ['归属势力', '青云门'], ['力量/成长坐标', v('炼气三段')],
+    ['首次出场章', '第1章'], ['关键章节链', v('第1章相遇')], ['核心关系', v('张三的挚友')],
+    ['说话风格与人设锚点', v('笑着说话')], ['体貌锚点', v('瘦高')], ['衣着与装束', v('青衫')],
+    ['神态与动作锚', v('摸鼻子')], ['外在目标（要什么）', v('求道')], ['内在缺口（缺什么）', v('怕被抛下')],
+    ['致命弱点（会毁在哪）', v('心软')], ['原型词', '白月光'], ['功能位', '镜子'], ['结局状态与死亡/退场章', '在世（未完）'],
+    ['金句锚', v('「张三那把刀，我一直替他留着。」')],
+  ]))
+  await writeRel('故事底本/全书设定/人物/次要角色/王五.md', card('王五', [
+    ['姓名（主名）', '王五'], ['别称与马甲', '无'], ['归属势力', '无'], ['力量/成长坐标', v('原文未写')],
+    ['首次出场章', '第2章'], ['关键章节链', v('第2章露面')], ['核心关系', v('路人')],
+    ['说话风格与人设锚点', v('沉默')], ['体貌锚点', v('原文未写')], ['衣着与装束', v('原文未写')],
+    ['神态与动作锚', v('原文未写')], ['外在目标（要什么）', v('原文未写')], ['内在缺口（缺什么）', v('原文未写')],
+    ['致命弱点（会毁在哪）', v('原文未写')], ['原型词', '告密者'], ['功能位', '氛围'], ['结局状态与死亡/退场章', '在世（未完）'],
+    ['金句锚', v('「张三的刀，我不碰。」')],
+  ]))
+  await writeRel('故事底本/全书设定/势力与组织/门派/青云门.md', card('青云门', [
+    ['名称与俗称', '青云门'], ['性质类型', '门派'], ['所在地/据点', '青云山'], ['层级结构', v('掌门—长老—弟子')],
+    ['成员表', v('李四')], ['势力关系', v('与魔教敌对')], ['与主角关系及演变', v('收留张三')],
+    ['首次出场章', '第1章'], ['关键事件章', v('第3章灭门')], ['状态变化', v('由盛转衰')], ['结局', v('覆灭')],
+  ]))
+  await writeRel('故事底本/全书设定/地点/城市与场所/车站.md', card('车站', [
+    ['名称', '车站'], ['别名与真名揭示章', '无'], ['所属区域', '县城'], ['功能与象征意义', v('离别之地')],
+    ['空间规则', '常规'], ['关联人物与势力', v('张三、李四')], ['首次出场章', '第1章'],
+    ['进入章', '第1章'], ['状态轨迹', v('始终原样')],
+  ]))
+  await writeRel('故事底本/全书设定/物品/武器/铁剑.md', card('铁剑', [
+    ['名称', '铁剑'], ['类别', '武器'], ['强度等级', v('能胜寻常镖师')], ['能力与代价', v('无特殊代价')],
+    ['获得章', '第1章'], ['经手与流转链', v('李四→张三')], ['象征义', v('信物')], ['结局', v('断于第5章')],
+  ]))
+  await writeRel('故事底本/全书设定/概念/事件/初遇.md', card('初遇', [
+    ['名称', '初遇'], ['一句话定义', v('两人在车站结识')], ['首次系统阐释章', '第1章'],
+    ['规则细节', v('无')], ['上位/下位概念', v('原文未提及其他概念')], ['揭示节奏', v('第1章引入')], ['与主角的关系', v('起点事件')],
+  ]))
 
   const P = '故事底本/全书设定'
   await writeRel(`${P}/人物/索引.md`, tableFile('人物索引', '人物索引', [
@@ -126,7 +162,7 @@ async function makeFilledProduct() {
     ['王五', '王五', '次要', '无', '路人', '第2章', `${P}/人物/次要角色/王五.md`],
   ]))
   await writeRel(`${P}/人物/人物关系.md`, tableFile('人物关系', '人物关系', [
-    ['张三', '挚友', '李四', '第1章', '不变'],
+    ['张三', '挚友', '李四', '第1章', '不变', '无变化'],
   ]))
   await writeRel(`${P}/势力与组织/索引.md`, tableFile('势力索引', '集合索引', [
     ['青云门', '门派', '主要', '第1章', `${P}/势力与组织/门派/青云门.md`],
@@ -141,25 +177,49 @@ async function makeFilledProduct() {
     ['初遇', '事件', '次要', '第1章', `${P}/概念/事件/初遇.md`],
   ]))
   await writeRel('工作/别名词典.md', tableFile('别名词典', '别名词典', [
+    // 词典要登齐所有立了卡的人（W_FIRST_SEEN）：卡片上的首现章要靠它来对账，
+    // 主名不登记就等于这个人没有权威首现章。首现章与下面各卡的「首次出场章」一致。
+    // 列序是 [别称, 主名, 实体类型, 首次出现章, 归并依据]——别称在前，别写反。
     ['张三', '张三', '人物', '第1章', '本名'],
+    ['四哥', '李四', '人物', '第1章', '本名'],
+    ['王五', '王五', '人物', '第2章', '本名'],
   ]))
   await writeRel('工作/逐章记录.md', tableFile('逐章记录', '逐章记录', [
     // 十二列：第 3 格「章字数」必须与 manifest.chapters[].chars 逐字一致（E_CHARCOUNT 严格校验），
     // 本夹具由 NOVEL 真实跑 prepare 生成，故此处取实测值 14/5/5/4/5。
-    ['1', '第一章 相遇', '14', '张三', '车站', '张三、李四', '相遇', '主线', '埋 F001', '扬', '悬念', '无'],
-    ['2', '第二章 同行', '5', '张三', '路上', '张三、李四', '同行', '主线', '', '扬', '期待', '小'],
-    ['3', '第三章 风波', '5', '张三', '路上', '张三、李四', '风波', '主线', '', '抑', '钝收', '无'],
-    ['4', '第四章 破局', '4', '张三', '路上', '张三、李四', '破局', '主线', '', '扬', '反差', '大'],
-    ['5', '第五章 归途', '5', '张三', '车站', '张三', '归途', '主线', '收 F001', '扬', '危机', '中'],
+    ['1', '第一章 相遇', '14', '张三', '车站', '张三、李四', '相遇', '主线', '埋 F001', '扬', '悬念', '无', '', '第一日', '雨打在车窗上。'],
+    ['2', '第二章 同行', '5', '张三', '路上', '张三、李四', '同行', '主线', '', '扬', '期待', '小', '逆袭', '第二日', '两人同行三十里。'],
+    ['3', '第三章 风波', '5', '张三', '路上', '张三、李四', '风波', '主线', '', '抑', '钝收', '无', '', '第三日', '起了风波。'],
+    ['4', '第四章 破局', '4', '张三', '路上', '张三、李四', '破局', '主线', '', '扬', '反差', '大', '打脸', '第四日', '破了局。'],
+    ['5', '第五章 归途', '5', '张三', '车站', '张三', '归途', '主线', '收 F001', '扬', '危机', '中', '情感', '第五日', '各自归途。'],
   ]))
   await writeRel('故事底本/故事剧情/伏笔台账.md', tableFile('伏笔台账', '伏笔台账', [
-    // 十一列跟进（Q-23/Q-24 跟进）：类型/回收幕/重要度取合法枚举。
-    ['F001', '信物', '道具', '第1章', '第2章', '第5章', '卷01-幕02', '4', '张三', '主线', '已收'],
+    // 十四列跟进：类型/埋点时读者以为/回收时真相/回收幕/颗粒度/重要度取合法值。
+    ['F001', '信物', '一把普通的刀', '是父亲留下的唯一凭证', '道具', '第1章', '第2章', '第5章', '卷01-幕02', '4', '张三', '结构', '主线', '已收'],
   ]))
+  // 总表的叙述列是卷纲的**压缩**，不是照抄（C-19 会把逐字重合报出来）。
+  // 夹具要体现这个关系：卷纲段里是同段的全句，总表这格只留关键词。
   await writeRel('故事底本/故事剧情/分卷总表.md', tableFile('分卷总表', '分卷总表', [
-    // 十五列跟进（Q-23/Q-24 跟进）：本卷主要对手/追读钩入列，商业外证写「无」＝无数据。
-    ['01', '全书', '书名', '1-5', '5', '100/20', '相遇钩', '关系困局', '李四', '成长', '车站', '定格', '下一卷悬念', '三天', '无'],
+    // 十六列（C-03）：爽点密度插在「字数与均章长」之后，由 volume-stats --write-total 写；本卷主要对手/追读钩入列，商业外证写「无」＝无数据。
+    ['01', '全书', '书名', '1-5', '5', '100/20', '40.0', '相遇钩', '关系困局', '李四', '成长', '车站', '悬念钩', '下一卷悬念', '三天', '无'],
   ]))
+
+  // 同步 manifest.files 的状态（B-06）：prepare 写下的是 skeleton，上面这一段已经把内容填好了。
+  // 不同步的话，W_STATE_DRIFT 会对每个文件报一条「状态未更新」——那是**正确**的告警（真实产物
+  // 填完后也确实需要更新状态），但这个夹具造的是「一份填好的合格产物」，不是「一份状态过期的产物」。
+  // 想测漂移本身的用例在 test/state-drift.test.mjs，那边刻意不同步。
+  {
+    const mp = join(out, '工作/manifest.json')
+    const m = JSON.parse(await readFile(mp, 'utf8'))
+    for (const rel of Object.keys(m.files)) {
+      if (rel.startsWith('原文/') || rel === '工作/manifest.json') continue
+      let text
+      try { text = await readFile(join(out, rel), 'utf8') } catch { continue }
+      const body = text.replace(/^>.*$/gm, '')
+      m.files[rel] = body.includes('（待填）') ? 'skeleton' : 'filled'
+    }
+    await writeFile(mp, `${JSON.stringify(m, null, 2)}\n`, 'utf8')
+  }
 
   return { dir, out }
 }
@@ -246,7 +306,7 @@ test('删段、改表头、删行、坏台账、多文件、缺文件、缺出�
     const recordRel = '工作/逐章记录.md'
     const record = await read(recordRel)
     // 十二列：删除目标行同步带「章字数」格，与 makeFilledProduct 的行保持逐字一致。
-    await write(recordRel, record.replace('| 5 | 第五章 归途 | 5 | 张三 | 车站 | 张三 | 归途 | 主线 | 收 F001 | 扬 | 危机 | 中 |\n', ''))
+    await write(recordRel, record.replace('| 5 | 第五章 归途 | 5 | 张三 | 车站 | 张三 | 归途 | 主线 | 收 F001 | 扬 | 危机 | 中 | 情感 | 第五日 | 各自归途。 |\n', ''))
     let r3 = await validateOutput({ root: out })
     assert.ok(r3.errors.some((e) => e.code === 'E_ROW_COUNT'), '应有 E_ROW_COUNT')
     await write(recordRel, record)
@@ -343,7 +403,7 @@ test('非产物目录报 E_MANIFEST', async () => {
 function lineRows(map, from = 1, to = 200) {
   const rows = []
   for (let no = from; no <= to; no++) {
-    rows.push([String(no), `第${no}章`, '1200', '主角', '某地', '主角', `事件${no}`, (map[no] ?? ['主线']).join('、'), '', '扬', '悬念', '无'])
+    rows.push([String(no), `第${no}章`, '1200', '主角', '某地', '主角', `事件${no}`, (map[no] ?? ['主线']).join('、'), '', '扬', '悬念', '无', '']) 
   }
   return rows
 }
@@ -376,17 +436,17 @@ test('W_LINE_GAP：人工缺席数据在交付与进度两模式都报警告（A
     const recordRel = '工作/逐章记录.md'
     // 注入缺席数据：支线·李四出现 3 次（第 1/2/3 章）后第 104 章才再现（章号差 101>100）；
     // 主线每行出现，其最大间隔 100 恰不超过阈值，不告警——对照出警告只打缺席线。
-    // 十一列跟进（Q-23/Q-24 跟进）：注入表同步补章末钩型/爽点标记两列（合法枚举）。
+    // 十三列跟进（Q-23/Q-24、A-09 跟进）：注入表同步补章末钩型/爽点强度/爽点类型三列（合法枚举）。
     // 十二列：再补「章字数」列（脚本填，此处填任意整数即可）。
     await writeFile(join(out, recordRel), [
       '# 逐章记录', '',
-      '| 全局章号 | 标题（清洗后） | 章字数 | 视角人物 | 地点 | 出场人物 | 一句话事件 | 剧情线 | 伏笔埋/收 | 情绪 | 章末钩型 | 爽点标记 |',
-      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
-      '| 1 | 第一章 相遇 | 14 | 张三 | 车站 | 张三、李四 | 相遇 | 主线、支线·李四 | 埋 F001 | 扬 | 悬念 | 无 |',
-      '| 2 | 第二章 同行 | 5 | 张三 | 路上 | 张三、李四 | 同行 | 主线、支线·李四 | | 扬 | 期待 | 小 |',
-      '| 3 | 第三章 风波 | 5 | 张三 | 路上 | 张三、李四 | 风波 | 主线、支线·李四 | | 抑 | 钝收 | 无 |',
-      '| 4 | 第四章 破局 | 4 | 张三 | 路上 | 张三、李四 | 破局 | 主线 | | 扬 | 反差 | 大 |',
-      '| 104 | 第五章 归途 | 5 | 张三 | 车站 | 张三 | 归途 | 主线、支线·李四 | 收 F001 | 扬 | 危机 | 中 |',
+      '| 全局章号 | 标题（清洗后） | 章字数 | 视角人物 | 地点 | 出场人物 | 一句话事件 | 剧情线 | 伏笔埋/收 | 情绪 | 章末钩型 | 爽点强度 | 爽点类型 | 故事内时间 | 章首句 |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| 1 | 第一章 相遇 | 14 | 张三 | 车站 | 张三、李四 | 相遇 | 主线、支线·李四 | 埋 F001 | 扬 | 悬念 | 无 |  | 第一日 | 雨打在车窗上。 |',
+      '| 2 | 第二章 同行 | 5 | 张三 | 路上 | 张三、李四 | 同行 | 主线、支线·李四 | | 扬 | 期待 | 小 | 逆袭 | 第二日 | 两人同行三十里。 |',
+      '| 3 | 第三章 风波 | 5 | 张三 | 路上 | 张三、李四 | 风波 | 主线、支线·李四 | | 抑 | 钝收 | 无 |  | 第三日 | 起了风波。 |',
+      '| 4 | 第四章 破局 | 4 | 张三 | 路上 | 张三、李四 | 破局 | 主线 | | 扬 | 反差 | 大 | 打脸 | 第四日 | 破了局。 |',
+      '| 104 | 第五章 归途 | 5 | 张三 | 车站 | 张三 | 归途 | 主线、支线·李四 | 收 F001 | 扬 | 危机 | 中 | 情感 | 第一百零四日 | 各自归途。 |',
       '',
     ].join('\n'), 'utf8')
     for (const mode of ['deliver', 'progress']) {
@@ -405,6 +465,23 @@ test('W_LINE_GAP：人工缺席数据在交付与进度两模式都报警告（A
 })
 
 // ---------- 策略空挂字段落地（票D：Q-23/Q-24，2026-10-23）----------
+
+test('T10：情绪列纳入枚举校验（ENUMS.情绪 定义了却从没被用过）', async () => {
+  await withFilled(async (out) => {
+    const recordRel = '工作/逐章记录.md'
+    const record = await readFile(join(out, recordRel), 'utf8')
+    // 「上扬」不以任何合法值开头（合法值是 扬/抑/震荡），此前完全不报
+    await writeFile(join(out, recordRel), record.replace('| 扬 | 悬念 |', '| 上扬 | 悬念 |'), 'utf8')
+    const r = await validateOutput({ root: out })
+    const hits = r.errors.filter((e) => e.code === 'E_ENUM')
+    assert.equal(hits.length, 1, '情绪非法值应恰报一条')
+    assert.match(hits[0].message, /第 1 行情绪「上扬」不在枚举内（扬、抑、震荡）/, '错误文案要列出合法取值')
+    // 合法：枚举值开头＋补充说明（「震荡（先扬后抑）」）不报
+    await writeFile(join(out, recordRel), record.replace('| 扬 | 悬念 |', '| 震荡（先扬后抑） | 悬念 |'), 'utf8')
+    const r2 = await validateOutput({ root: out })
+    assert.ok(!r2.errors.some((e) => e.code === 'E_ENUM'), '枚举开头的带说明取值不应误报')
+  })
+})
 
 test('E_ENUM：逐章记录钩型非法值报错、枚举开头与待填不报（A-4）', async () => {
   await withFilled(async (out) => {
@@ -536,5 +613,682 @@ test('W_QUOTE：散文段落里的结论也进覆盖率分母（不能靠改写�
       r.errors.some((e) => e.code === 'W_QUOTE' && e.file === rel),
       '散文写法的引述型结论必须进分母，否则改格式就能抹掉警告',
     )
+    // T1：同一批散文结论还要单独报一次 W_PROSE，让「这个文件主要靠散文承载结论」进交付报告。
+    assert.ok(
+      r.errors.some((e) => e.code === 'W_PROSE' && e.file === rel),
+      '靠散文承载结论的文件须单独报警告，否则这部分内容在报告里看不见',
+    )
+  })
+})
+
+// #24：剩下一半——不带章号的散文。上面那条只覆盖「带章号但写成散文」。
+// 不带章号的散文原先整行 continue，既不进分母也不进任何统计，
+// 于是它是唯一一种能让内容从账本里彻底消失的写法：写出章号会掉覆盖率，不写就满绿。
+test('W_PROSE_NOSRC：不带章号的散文结论也进分母，并单独点名', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/概念/事件/无源.md'
+    // 4 条散文结论，一条章号都不写，也都不带引句。
+    // 旧代码会把 4 行全部跳过：claims=0，分母归零，什么警告都不报。
+    const noSrc = [
+      '# 无源',
+      '',
+      '- 名称：无源',
+      '',
+      '两人在车站相遇，李四主动搭话，这段关系就此定下基调。',
+      '',
+      '这次相遇决定了后面所有的同行与分歧。',
+      '',
+      '王五在场但始终没有说话，他的立场到最后才揭开。',
+      '',
+      '车站此后成为反复出现的地点，每次回去都对应一次转折。',
+      '',
+    ].join('\n')
+    await writeFile(join(out, rel), noSrc, 'utf8')
+    const r = await validateOutput({ root: out })
+    const nosrc = r.errors.find((e) => e.code === 'W_PROSE_NOSRC' && e.file === rel)
+    assert.ok(nosrc, '不带章号的散文结论必须被点名，否则它是唯一的静默通道')
+    assert.match(nosrc.message, /4 条/, '消息里要写出条数，才知道有多少内容没出处')
+    assert.match(nosrc.message, /第 N 章/, '消息里要写出缺的是什么（章号出处），不然不知道该补什么')
+    // 它确实进了分母：4 条里 0 条带引句 → W_PROSE 也该报
+    assert.ok(
+      r.errors.some((e) => e.code === 'W_PROSE' && e.file === rel),
+      '不带章号的散文也必须计入散文分母，否则「覆盖率」仍可被规避',
+    )
+  })
+})
+
+// 反例：叙述型摘要不带章号仍是豁免的。
+// 这条防的是「为了修 #24 把豁免一起删掉」——真书实测幕纲里 12 条编号事件链
+// 若全进分母，覆盖率会从 42% 压到 26%，而问题并不在那些行。
+test('W_PROSE_NOSRC：叙述型摘要（编号事件链）不带章号仍然豁免', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/概念/事件/摘要体.md'
+    const summary = [
+      '# 摘要体',
+      '',
+      '- 名称：摘要体',
+      '',
+      '1. 芝加哥火车站，李四与王五碰面，约定同行。',
+      '',
+      '2. 途中遭遇伏击，两人分散又重聚。',
+      '',
+      '3. 抵达目的地，发现接应的人已经换了一个。',
+      '',
+    ].join('\n')
+    await writeFile(join(out, rel), summary, 'utf8')
+    const r = await validateOutput({ root: out })
+    assert.ok(
+      !r.errors.some((e) => e.code === 'W_PROSE_NOSRC' && e.file === rel),
+      '编号事件链是缩写不是结论，不该被要求配章号',
+    )
+  })
+})
+
+// T18b：data.errors 与 problems 必须说同一件事。
+// 原先 progress 模式在返回前 `errors.length = 0` 清计数，problems 却原样返回，
+// 于是汇总说「错误 0」、CLI 按 severity 逐条打印「错误 [E_INDEX]」——同一份结果两个说法。
+for (const mode of ['deliver', 'progress']) {
+  test(`T18b：${mode} 模式下 data.errors 等于 problems 里 error 的条数`, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vo-count-'))
+    try {
+      const src = join(dir, '骨架书.txt')
+      await writeFile(src, NOVEL, 'utf8')
+      const r = await prepare({ input: src })
+      const result = await validateOutput({ root: r.outDir, mode })
+      const errorCount = result.errors.filter((e) => e.severity === 'error').length
+      const warningCount = result.errors.filter((e) => e.severity === 'warning').length
+      assert.equal(result.data.errors, errorCount, 'data.errors 必须等于 problems 里 error 的条数')
+      assert.equal(result.data.warnings, warningCount, 'data.warnings 必须等于 problems 里 warning 的条数')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+}
+
+test('T18b：骨架态空集合在进度模式降为 W_INDEX_EMPTY，交付模式仍是 E_INDEX', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'vo-empty-'))
+  try {
+    const src = join(dir, '骨架书.txt')
+    await writeFile(src, NOVEL, 'utf8')
+    const r = await prepare({ input: src })
+    const progress = await validateOutput({ root: r.outDir, mode: 'progress' })
+    const deliver = await validateOutput({ root: r.outDir, mode: 'deliver' })
+    assert.ok(
+      !progress.errors.some((e) => e.code === 'E_INDEX'),
+      '进度模式不该把「还没做」报成错误（它靠 severity 降级，不靠清计数）',
+    )
+    assert.ok(
+      progress.errors.some((e) => e.code === 'W_INDEX_EMPTY' && e.severity === 'warning'),
+      '进度模式要把空集合报成警告，让使用者知道还有哪些集合没做',
+    )
+    assert.ok(
+      deliver.errors.some((e) => e.code === 'E_INDEX' && e.severity === 'error'),
+      '交付模式空集合仍是错误，否则空产物也交得出去',
+    )
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// 卡片字段清单必须与模板对得上：CARD_FIELDS 里的每个标签都要能在对应模板里找到。
+// 这条是 #20 引入的回归留下的教训——当时把模板里「原型词/功能位」一行拆成两行，
+// 却没同步改 CARD_FIELDS，于是每一张按模板填的卡都报「缺 1 个字段标签」；
+// 而测试夹具恰好写的是旧的合并写法，测试全绿、真实产物必失败。
+test('CARD_FIELDS 的每个标签都能在对应模板里找到（模板改了清单要跟着改）', async () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'book-breakdown', 'assets')
+  const TEMPLATE_OF = {
+    人物: '人物卡模板.md',
+    势力与组织: '势力卡模板.md',
+    地点: '地点卡模板.md',
+    物品: '物品卡模板.md',
+    概念: '概念卡模板.md',
+  }
+  const missing = []
+  for (const [kind, labels] of Object.entries(CARD_FIELDS)) {
+    const file = TEMPLATE_OF[kind]
+    let text
+    try { text = readFileSync(join(root, file), 'utf8') } catch { missing.push(`${kind}: 找不到模板 ${file}`); continue }
+    for (const label of labels) {
+      if (!text.includes(label)) missing.push(`${kind}: 模板 ${file} 里没有标签「${label}」`)
+    }
+  }
+  assert.deepEqual(missing, [], `CARD_FIELDS 与模板不一致：\n${missing.join('\n')}`)
+})
+
+test('CARD_FIELDS 覆盖模板里的每个可填字段（清单漏一项就等于少查一格）', async () => {
+  // 与上一条反着查：上一条防「清单里有模板没有的标签」（必误报），
+  // 这一条防「模板有而清单没有的标签」（必漏检）——两者都是回归，方向相反。
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'book-breakdown', 'assets')
+  const TEMPLATE_OF = {
+    人物: '人物卡模板.md',
+    势力与组织: '势力卡模板.md',
+    地点: '地点卡模板.md',
+    物品: '物品卡模板.md',
+    概念: '概念卡模板.md',
+  }
+  const uncovered = []
+  for (const [kind, file] of Object.entries(TEMPLATE_OF)) {
+    const text = readFileSync(join(root, file), 'utf8')
+    const lines = text.split(/\r?\n/)
+    // 只看「## 内容」小节里的「- 字段名：…」。模板开头的「## 概念」节（定义/目的/边界）
+    // 与文末元信息（填写者/条款）是说明区，不是卡片上要填的格子，不该进这份清单。
+    const body = []
+    let inContent = false
+    for (const line of lines) {
+      if (/^## /.test(line)) { inContent = /^## 内容/.test(line); continue }
+      if (inContent) body.push(line)
+    }
+    const labels = body.map((l) => /^- ([^：:\n]{2,20})：/.exec(l)).filter(Boolean).map((m) => m[1].trim())
+    const known = new Set(CARD_FIELDS[kind])
+    for (const label of new Set(labels)) {
+      // 同一行的括注写法（如「姓名（主名）」）在模板里可能是「姓名：」，用前缀双向匹配
+      const hit = known.has(label) || [...known].some((k) => k.startsWith(label) || label.startsWith(k))
+      if (!hit) uncovered.push(`${kind}: 模板 ${file} 的字段「${label}」不在 CARD_FIELDS 里`)
+    }
+  }
+  assert.deepEqual(uncovered, [], `CARD_FIELDS 漏了模板里的字段（这些格子不会被查）：\n${uncovered.join('\n')}`)
+})
+
+// T9：卡片字段存在性。此前 52 个卡片字段零校验——路径不被 productOf() 识别，
+// 「有没有填」这件事根本不进账本，交出一张只有标题的空卡也能过。
+test('T9：卡片缺字段标签或有标签无内容时报 E_CARD_FIELD', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/势力与组织/门派/青云门.md'
+    // 先留住夹具里那份填好的卡，后面两步都在它的基础上改一处。
+    const full = await readFile(join(out, rel), 'utf8')
+    assert.match(full, /- 层级结构：/, '夹具里的卡应是按模板填好的')
+
+    // ① 只有标题没有字段 → 缺标签
+    await writeFile(join(out, rel), '# 青云门\n\n一句话说完。\n', 'utf8')
+    const r1 = await validateOutput({ root: out })
+    assert.ok(
+      r1.errors.some((e) => e.code === 'E_CARD_FIELD' && e.file === rel && /缺 \d+ 个字段标签/.test(e.message)),
+      '只有标题的空卡必须报缺字段',
+    )
+
+    // ② 标签齐全但有一格空着 → 有标签无内容
+    const holed = full.replace(/- 层级结构：[^\n]*/, '- 层级结构：')
+    assert.notEqual(holed, full, '替换须真的把值清空')
+    await writeFile(join(out, rel), holed, 'utf8')
+    const r2 = await validateOutput({ root: out })
+    assert.ok(
+      r2.errors.some((e) => e.code === 'E_CARD_FIELD' && e.file === rel && /有标签无内容/.test(e.message)),
+      '标签在但内容空着也要报，否则留空即可绕开',
+    )
+
+    // ③ 填「无（第 N 章）」是合法填写，不该报
+    await writeFile(join(out, rel),
+      full.replace(/- 层级结构：[^\n]*/, '- 层级结构：无（第 1 章：未提及层级）'), 'utf8')
+    const r3 = await validateOutput({ root: out })
+    assert.ok(
+      !r3.errors.some((e) => e.code === 'E_CARD_FIELD' && e.file === rel),
+      '「无」加注章是合法填写，不能被判为空',
+    )
+
+    // ④ 空值行的下一行不能被当成它的值（正则 `\s*` 会吃换行，曾把「- 层级结构：」判成已填）
+    const nextLine = full.replace(/- 层级结构：[^\n]*/, '- 层级结构：\n- 状态变化：由盛转衰')
+    assert.notEqual(nextLine, full)
+    await writeFile(join(out, rel), nextLine, 'utf8')
+    const r4 = await validateOutput({ root: out })
+    assert.ok(
+      r4.errors.some((e) => e.code === 'E_CARD_FIELD' && /有标签无内容/.test(e.message) && /层级结构/.test(e.message)),
+      '空值行不得吞掉下一行当作自己的值',
+    )
+  })
+})
+
+test('T9：主角五文件不走卡片字段校验（人物卡模板明写「主角不用本卡」）', async () => {
+  await withFilled(async (out) => {
+    // 夹具里的主角五文件本来就只有一个段落，没有 17 个卡片字段；若误走卡片校验会误报。
+    const r = await validateOutput({ root: out })
+    const hits = r.errors.filter(
+      (e) => e.code === 'E_CARD_FIELD' && e.file.includes('/人物/主角/'),
+    )
+    assert.deepEqual(hits, [], '主角五文件各有自己的段名契约，不该套人物卡字段模板')
+  })
+})
+
+test('T14：产物契约版本与校验器不一致时给提示，但不改判定', async () => {
+  await withFilled(async (out) => {
+    const mf = join(out, '工作', 'manifest.json')
+    const original = await readFile(mf, 'utf8')
+    const { CONTRACT_VERSION } = await import('../skills/book-breakdown/scripts/contract.mjs')
+
+    // ① 新版产物：版本一致，不报
+    const cur = await validateOutput({ root: out })
+    assert.ok(!cur.errors.some((e) => e.code === 'W_CONTRACT_VERSION'), '版本一致时不该报')
+
+    // ② 旧版产物（无该字段）：报一条警告
+    const old = JSON.parse(original)
+    delete old.contractVersion
+    await writeFile(mf, `${JSON.stringify(old, null, 2)}\n`, 'utf8')
+    const r2 = await validateOutput({ root: out })
+    const hits = r2.errors.filter((e) => e.code === 'W_CONTRACT_VERSION')
+    assert.equal(hits.length, 1, '旧版产物须提示契约版本缺失')
+    assert.equal(hits[0].severity, 'warning', '这是提示不是错误：旧产物的报错大多是真实缺陷')
+    assert.match(hits[0].message, /未记录契约版本/)
+
+    // ③ 更高版本：报提示
+    const future = JSON.parse(original)
+    future.contractVersion = '9.9.9'
+    await writeFile(mf, `${JSON.stringify(future, null, 2)}\n`, 'utf8')
+    const r3 = await validateOutput({ root: out })
+    assert.ok(r3.errors.some((e) => e.code === 'W_CONTRACT_VERSION' && /9\.9\.9/.test(e.message)))
+
+    // 恢复
+    await writeFile(mf, original, 'utf8')
+    const back = await validateOutput({ root: out })
+    assert.ok(!back.errors.some((e) => e.code === 'W_CONTRACT_VERSION'))
+    assert.ok(CONTRACT_VERSION)
+  })
+})
+
+test('T17：相邻幕出口情绪与下一幕入幕情绪同值且无承接说明时报 W_ACT_HOOK', async () => {
+  await withFilled(async (out) => {
+    const a1 = '故事底本/故事剧情/幕纲/卷01-幕01-相遇弧.md'
+    const a2 = '故事底本/故事剧情/幕纲/卷01-幕02-风波弧.md'
+    const base = await readFile(join(out, a1), 'utf8')
+
+    // 幕1 出口＝扬，幕2 入幕＝扬：同值接续，两幕都没写承接理由 → 报
+    await writeFile(join(out, a1), base.replace(
+      /## 情绪基调与走向\n\n[^\n]*/,
+      '## 情绪基调与走向\n\n入幕：抑；幕中峰值：扬；出口：扬',
+    ), 'utf8')
+    const b2 = await readFile(join(out, a2), 'utf8')
+    await writeFile(join(out, a2), b2.replace(
+      /## 情绪基调与走向\n\n[^\n]*/,
+      '## 情绪基调与走向\n\n入幕：扬；幕中峰值：抑；出口：抑',
+    ), 'utf8')
+
+    const r1 = await validateOutput({ root: out })
+    const hooks = r1.errors.filter((e) => e.code === 'W_ACT_HOOK')
+    assert.equal(hooks.length, 1, '同值接续且无说明应恰报一条')
+    assert.equal(hooks[0].severity, 'warning', '这是提示不是错误：情绪走势要看剧情')
+    assert.match(hooks[0].message, /同为「扬」/)
+
+    // 写明承接理由即消
+    await writeFile(join(out, a2), (await readFile(join(out, a2), 'utf8')).replace(
+      '入幕：扬；幕中峰值：抑；出口：抑',
+      '入幕：扬（承接上一幕战果）；幕中峰值：抑；出口：抑',
+    ), 'utf8')
+    const r2 = await validateOutput({ root: out })
+    assert.ok(!r2.errors.some((e) => e.code === 'W_ACT_HOOK'), '写了承接理由就不该再报')
+
+    // 有落差（扬→抑）不报：落差正是幕间该有的东西
+    await writeFile(join(out, a1), base.replace(
+      /## 情绪基调与走向\n\n[^\n]*/,
+      '## 情绪基调与走向\n\n入幕：抑；幕中峰值：扬；出口：扬',
+    ), 'utf8')
+    await writeFile(join(out, a2), b2.replace(
+      /## 情绪基调与走向\n\n[^\n]*/,
+      '## 情绪基调与走向\n\n入幕：抑；幕中峰值：扬；出口：扬',
+    ), 'utf8')
+    const r3 = await validateOutput({ root: out })
+    assert.ok(!r3.errors.some((e) => e.code === 'W_ACT_HOOK'), '扬→抑 是正常落差，不该报')
+  })
+})
+
+test('T18：引句里没有具体名词时报 W_QUOTE_WEAK（换个书名照样成立）', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/人物/主要配角/李四.md'
+    const orig = await readFile(join(out, rel), 'utf8')
+    // 造三条带章号的结论，引句全是纯抒情（无人名/地名/器物/数字）
+    await writeFile(join(out, rel), `${orig}\n\n## 内容\n\n- 性格底色：他是个温和的人（第 1 章：「我累了。」）\n- 处事方式：遇事先退一步（第 2 章：「算了罢。」）\n- 与人相处：不爱争辩（第 3 章：「随你去。」）\n`, 'utf8')
+    const r1 = await validateOutput({ root: out })
+    const weak = r1.errors.filter((e) => e.code === 'W_QUOTE_WEAK')
+    assert.equal(weak.length, 1, '三条可替换引句应汇总报一条')
+    assert.equal(weak[0].severity, 'warning')
+    assert.match(weak[0].message, /没有具体名词/)
+    assert.match(weak[0].message, /换个书名照样成立/)
+
+    // 换成含具体名词的引句 → 不报
+    await writeFile(join(out, rel), `${orig}\n\n## 内容\n\n- 性格底色：他是个温和的人（第 1 章：「这城我不降。」）\n- 处事方式：遇事先退一步（第 2 章：「三日后再说。」）\n- 与人相处：不爱争辩（第 3 章：「那把剑你拿走。」）\n`, 'utf8')
+    const r2 = await validateOutput({ root: out })
+    assert.ok(!r2.errors.some((e) => e.code === 'W_QUOTE_WEAK'), '含具体名词的引句不该被判弱')
+
+    await writeFile(join(out, rel), orig, 'utf8')
+  })
+})
+
+test('T18：W_QUOTE_WEAK 不改交付判定（只警告）', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/人物/主要配角/李四.md'
+    const orig = await readFile(join(out, rel), 'utf8')
+    await writeFile(join(out, rel), `${orig}\n\n## 内容\n\n- 性格底色：温和（第 1 章：「我累了。」）\n- 处事方式：先退（第 2 章：「算了罢。」）\n- 与人相处：不争（第 3 章：「随你去。」）\n`, 'utf8')
+    const r = await validateOutput({ root: out })
+    assert.ok(r.errors.some((e) => e.code === 'W_QUOTE_WEAK'), '应有该警告')
+    assert.equal(r.data.errors, 0, '警告不计入 errors，产物仍算通过')
+    assert.ok(r.ok)
+    await writeFile(join(out, rel), orig, 'utf8')
+  })
+})
+
+test('W_NO_COST：金手指代价写「无」但没给章号时告警（B-06）', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/金手指.md'
+    const orig = await readFile(join(out, rel), 'utf8')
+    const next = orig.replace(/## 代价与限制\n\n[\s\S]*?(?=\n## |$)/, '## 代价与限制\n\n- 无\n')
+    assert.notEqual(next, orig, '夹具应含「代价与限制」段')
+    await writeFile(join(out, rel), next, 'utf8')
+    const r = await validateOutput({ root: out })
+    assert.ok(r.errors.some((e) => e.code === 'W_NO_COST'), `应有 W_NO_COST，实际：${r.errors.map((e) => e.code).join(',')}`)
+    assert.equal(r.data.errors, 0, '警告不计入 errors——真的无代价的书不该被拦下')
+    assert.ok(r.ok)
+    await writeFile(join(out, rel), orig, 'utf8')
+  })
+})
+
+test('W_NO_COST：写了「无」但附了依据章号时不告警（反向，防误报）', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/金手指.md'
+    const orig = await readFile(join(out, rel), 'utf8')
+    const next = orig.replace(
+      /## 代价与限制\n\n[\s\S]*?(?=\n## |$)/,
+      '## 代价与限制\n\n- 无代价（第 1 章明写「此物不索报偿」，主角只失去睡眠）\n',
+    )
+    await writeFile(join(out, rel), next, 'utf8')
+    const r = await validateOutput({ root: out })
+    assert.ok(!r.errors.some((e) => e.code === 'W_NO_COST'), '附了章号就不该告警')
+    await writeFile(join(out, rel), orig, 'utf8')
+  })
+})
+
+test('W_NO_COST：代价写了具体内容（非「无」）时不告警——这条只查「无」', async () => {
+  await withFilled(async (out) => {
+    const rel = '故事底本/全书设定/金手指.md'
+    const orig = await readFile(join(out, rel), 'utf8')
+    const next = orig.replace(
+      /## 代价与限制\n\n[\s\S]*?(?=\n## |$)/,
+      '## 代价与限制\n\n- 每次使用折寿三年（第 2 章「三载之寿，一用即尽」）\n',
+    )
+    await writeFile(join(out, rel), next, 'utf8')
+    const r = await validateOutput({ root: out })
+    assert.ok(!r.errors.some((e) => e.code === 'W_NO_COST'), '写了具体代价就不该告警')
+    await writeFile(join(out, rel), orig, 'utf8')
+  })
+})
+
+// ---------- C-09：工作/增量/ 是合法的过程目录 ----------
+//
+// 幕末增量中间件（工作/增量/幕NN.json）是伏笔台账与人物卡的写入通道：
+// agent 逐幕只报「看到了什么」，编号由合并脚本统一重编。
+// 手算编号是伏笔台账最大的出错来源——合错号、重号、跳号都从这里来。
+//
+// 这条要防的是两件事：
+//   ① 白名单缺规则 → 正常的增量文件被判 E_TREE_EXTRA，流程根本走不下去；
+//   ② 白名单放太宽 → 工作/ 变成什么都能塞的垃圾桶。
+test('C-09：工作/增量/ 下的增量片段不报 E_TREE_EXTRA', async () => {
+  await withFilled(async (out) => {
+    await mkdir(join(out, '工作', '增量'), { recursive: true })
+    await writeFile(join(out, '工作', '增量', '幕01.json'), '{"entities":[],"foreshadows":[]}\n', 'utf8')
+    await writeFile(join(out, '工作', '增量', '幕02.json'), '{"entities":[],"foreshadows":[]}\n', 'utf8')
+    await writeFile(join(out, '工作', '增量', '阶段06-装置.md'), '# 装置初版\n\n- 核心冲突：待定（第1章）\n', 'utf8')
+    const r = await validateOutput({ root: out })
+    const extra = r.errors.filter((e) => e.code === 'E_TREE_EXTRA')
+    assert.deepEqual(
+      extra.map((e) => e.file),
+      [],
+      `增量片段应被白名单接受，实际被判多余的：${extra.map((e) => e.file).join('、')}`,
+    )
+  })
+})
+
+test('C-09：增量目录的命名规则是收紧的，不是整个 工作/ 放行', async () => {
+  await withFilled(async (out) => {
+    await mkdir(join(out, '工作', '增量'), { recursive: true })
+    // 不合规的几种：章号不是两位、扩展名不对、名字随便起
+    await writeFile(join(out, '工作', '增量', '幕1.json'), '{}\n', 'utf8')
+    await writeFile(join(out, '工作', '增量', '幕01.txt'), 'x\n', 'utf8')
+    await writeFile(join(out, '工作', '增量', '随便.md'), 'x\n', 'utf8')
+    const r = await validateOutput({ root: out })
+    const extra = r.errors.filter((e) => e.code === 'E_TREE_EXTRA').map((e) => e.file).sort()
+    assert.deepEqual(
+      extra,
+      ['工作/增量/幕01.txt', '工作/增量/幕1.json', '工作/增量/随便.md'].sort(),
+      '白名单要按名字收紧：只认 幕NN.json 与 阶段NN-装置.md，不能整个 工作/ 放行',
+    )
+  })
+})
+
+// ---------- C-19：分卷总表照抄卷纲 ----------
+//
+// 列下标一律按列名查，不写数字：C-03 插入「爽点密度」后，原来的 cells[7] 从
+// 「核心压力源」变成了「爽点密度」，于是下面几个用例全都在改错的格子——
+// 它们仍然是绿的（没报错），但测的已经不是照抄。数字下标会在插列时静默失效。
+const colIdx = (name) => tableColumns('分卷总表').indexOf(name)
+
+//
+// 总表的叙述列是「从卷纲压缩来的」，但压缩和照抄在产物上长得一样。
+// 真书实测「一句话钩子」与卷纲同段逐字相同——说明「压缩」实为复制，这一列等于白填。
+//
+// 有意只做「照抄」一个方向，不判「过期」：压缩本来就该只留关键词，
+// 低重合是完全正确的写法。第一版拿低重合当过期，fixture 里四个正常列全被误报。
+
+test('C-19：总表叙述列逐字照抄卷纲时报 W_TABLE_STALE', async () => {
+  await withFilled(async (out) => {
+    const volRel = '故事底本/故事剧情/卷纲/卷01-全书.md'
+    const tableRel = '故事底本/故事剧情/分卷总表.md'
+    const volText = await readFile(join(out, volRel), 'utf8')
+
+    // 把卷纲「主要冲突与对手」整段灌进总表的「核心压力源」格 → 必报
+    const body = /## 主要冲突与对手\n\n(.+)/.exec(volText)?.[1]?.trim()
+    assert.ok(body, '夹具卷纲应有「主要冲突与对手」段')
+    const table = await readFile(join(out, tableRel), 'utf8')
+    const patched = table.split('\n').map((line) => {
+      if (!line.startsWith('| 01 ')) return line
+      const cells = line.slice(1, -1).split('|').map((c) => c.trim())
+      cells[colIdx('核心压力源')] = body
+      return `| ${cells.join(' | ')} |`
+    }).join('\n')
+    await writeFile(join(out, tableRel), patched, 'utf8')
+
+    const r = await validateOutput({ root: out })
+    const hit = r.errors.filter((w) => w.code === 'W_TABLE_STALE')
+    assert.equal(hit.length, 1, `该报 1 条照抄告警，实际 ${hit.length}：${hit.map((h) => h.message).join('；')}`)
+    assert.match(hit[0].message, /核心压力源/, '要点名是哪一列')
+    assert.match(hit[0].message, /照抄/, '要说清问题性质是照抄，不是「不一致」')
+  })
+})
+
+test('C-19：总表只留关键词（真压缩）时不报——压缩本来就该低重合', async () => {
+  await withFilled(async (out) => {
+    const tableRel = '故事底本/故事剧情/分卷总表.md'
+    const table = await readFile(join(out, tableRel), 'utf8')
+    // 全句压成关键词：这是正确写法，重合度极低，但绝不能报
+    const patched = table.split('\n').map((line) => {
+      if (!line.startsWith('| 01 ')) return line
+      const cells = line.slice(1, -1).split('|').map((c) => c.trim())
+      cells[colIdx('核心压力源')] = '公司' // 卷纲那段是「卷纲·主要冲突与对手」，这里只留关键词
+      cells[colIdx('卷末状态（悬念定格方式）')] = '悬念' // 卷纲那段是「卷纲·卷末收束与悬念定格」
+      return `| ${cells.join(' | ')} |`
+    }).join('\n')
+    await writeFile(join(out, tableRel), patched, 'utf8')
+
+    const r = await validateOutput({ root: out })
+    const hit = r.errors.filter((w) => w.code === 'W_TABLE_STALE')
+    assert.deepEqual(hit.map((h) => h.message), [], '低重合是正常压缩，不该报——这条防的正是把好写法报成问题')
+  })
+})
+
+test('C-19：总表未填（还有占位）时不参与比对，不制造噪音', async () => {
+  await withFilled(async (out) => {
+    const tableRel = '故事底本/故事剧情/分卷总表.md'
+    const table = await readFile(join(out, tableRel), 'utf8')
+    const patched = table.split('\n').map((line) => {
+      if (!line.startsWith('| 01 ')) return line
+      const cells = line.slice(1, -1).split('|').map((c) => c.trim())
+      cells[colIdx('核心压力源')] = '（待填）'
+      return `| ${cells.join(' | ')} |`
+    }).join('\n')
+    await writeFile(join(out, tableRel), patched, 'utf8')
+    const r = await validateOutput({ root: out })
+    assert.equal(r.errors.filter((w) => w.code === 'W_TABLE_STALE').length, 0, '整表未填时该跳过，而不是把每个空列都报一遍')
+  })
+})
+
+// 照抄还有一种常见形态：把卷纲整段搬过来**又补了几句自己的评语**。
+// 这时正向重合会被拉低（格子里有段外内容），只有反向重合还高——
+// 用 min 才能抓住它；只看正向会漏掉这一类，而它恰恰是最常见的「假装压缩」。
+test('C-19：整段搬来又加评语时仍算照抄（正向会被稀释，反向不会）', async () => {
+  await withFilled(async (out) => {
+    const volRel = '故事底本/故事剧情/卷纲/卷01-全书.md'
+    const tableRel = '故事底本/故事剧情/分卷总表.md'
+    const volText = await readFile(join(out, volRel), 'utf8')
+    const body = /## 主要冲突与对手\n\n(.+)/.exec(volText)?.[1]?.trim()
+    assert.ok(body, '夹具卷纲应有「主要冲突与对手」段')
+    // 加上比原文更长的补充说明：正向分母变大、比率被稀释，反向仍接近 1
+    const padding = '这一层压力在全卷反复加码，且始终没有真正解除，直到卷末才出现转机'
+    const table = await readFile(join(out, tableRel), 'utf8')
+    const patched = table.split('\n').map((line) => {
+      if (!line.startsWith('| 01 ')) return line
+      const cells = line.slice(1, -1).split('|').map((c) => c.trim())
+      cells[colIdx('核心压力源')] = `${body}${padding}`
+      return `| ${cells.join(' | ')} |`
+    }).join('\n')
+    await writeFile(join(out, tableRel), patched, 'utf8')
+
+    const r = await validateOutput({ root: out })
+    const hit = r.errors.filter((w) => w.code === 'W_TABLE_STALE' && /核心压力源/.test(w.message))
+    assert.equal(hit.length, 1, '整段搬来再加评语仍是照抄，必须报——只看向前重合会漏掉这一类')
+  })
+})
+
+// 骨架刚建出来时，总表那一格和卷纲那一段都还是「（待填）」。
+// 两边都是占位时反向重合是 100%——若只跳过格子这一侧，一份全空的产物会被报成「照抄卷纲」。
+// 这不是理论风险：prepare 建完骨架就是这个状态，校验器会立刻对每本书报一堆假告警。
+test('C-19：总表与卷纲两边都还是占位时不报（骨架态不制造假告警）', async () => {
+  await withFilled(async (out) => {
+    const volRel = '故事底本/故事剧情/卷纲/卷01-全书.md'
+    const tableRel = '故事底本/故事剧情/分卷总表.md'
+    // 把卷纲那段也退回占位，模拟骨架态
+    const volText = await readFile(join(out, volRel), 'utf8')
+    await writeFile(join(out, volRel), volText.replace(
+      /## 主要冲突与对手\n\n[^\n]*/, '## 主要冲突与对手\n\n（待填）',
+    ), 'utf8')
+    const table = await readFile(join(out, tableRel), 'utf8')
+    const patched = table.split('\n').map((line) => {
+      if (!line.startsWith('| 01 ')) return line
+      const cells = line.slice(1, -1).split('|').map((c) => c.trim())
+      cells[colIdx('核心压力源')] = '（待填）'
+      return `| ${cells.join(' | ')} |`
+    }).join('\n')
+    await writeFile(join(out, tableRel), patched, 'utf8')
+
+    const r = await validateOutput({ root: out })
+    assert.deepEqual(
+      r.errors.filter((w) => w.code === 'W_TABLE_STALE').map((w) => w.message),
+      [],
+      '两边都是占位时重合度恒为 100%，必须跳过，否则每本新书都报假照抄',
+    )
+  })
+})
+
+// 占位写法会漂：手打「待填」、半角括号「(待填)」、带空格「待填 」都出现过。
+// 全等匹配只认模板那一种，漏掉的后果是「两侧都占位 → 反向重合 100% → 报成照抄」。
+test('C-19：占位判定认手写变体（待填／(待填)／带空格），不只认模板那一种写法', async () => {
+  await withFilled(async (out) => {
+    const volRel = '故事底本/故事剧情/卷纲/卷01-全书.md'
+    const tableRel = '故事底本/故事剧情/分卷总表.md'
+    for (const variant of ['待填', '(待填)', '待填 ']) {
+      const volText = await readFile(join(out, volRel), 'utf8')
+      await writeFile(join(out, volRel), volText.replace(
+        /## 主要冲突与对手\n\n[^\n]*/, `## 主要冲突与对手\n\n${variant}`,
+      ), 'utf8')
+      const table = await readFile(join(out, tableRel), 'utf8')
+      const patched = table.split('\n').map((line) => {
+        if (!line.startsWith('| 01 ')) return line
+        const cells = line.slice(1, -1).split('|').map((c) => c.trim())
+        cells[colIdx('核心压力源')] = variant
+        return `| ${cells.join(' | ')} |`
+      }).join('\n')
+      await writeFile(join(out, tableRel), patched, 'utf8')
+
+      const r = await validateOutput({ root: out })
+      assert.deepEqual(
+        r.errors.filter((w) => w.code === 'W_TABLE_STALE').map((w) => w.message),
+        [],
+        `占位变体「${variant}」两侧相同，不该报成照抄`,
+      )
+    }
+  })
+})
+
+// ---------- C-25：报告的要素四表要有表头契约 ----------
+//
+// 快速模式的 `拆书报告.md` 有四张表（人物/设定/情节线/技法）。它们原先没有表头契约：
+// `E_COLUMN` 管不到，模板里写错一列没人知道。这与「三列还是四列」无关，
+// 是「没契约的产物写错没人知道」这一类问题。
+//
+// 报告文件名由用户指定，所以检查不写死路径：按「含 ### 人物 小节」认。
+
+function reportText(overrides = {}) {
+  const sections = [['人物', '人物'], ['设定', '设定'], ['情节线', '情节线'], ['技法', '技法']]
+  return [
+    '# 拆书报告',
+    '',
+    '- 书名：合成小书',
+    '- 总字数：1000',
+    '- 章节数：3',
+    '',
+    '## 章节摘要',
+    '',
+    '| 序号 | 标题 | 摘要 |',
+    '| --- | --- | --- |',
+    '| 1 | 第一章 | 甲到了车站 |',
+    '',
+    '## 要素',
+    '',
+    ...sections.flatMap(([name, col]) => {
+      const cols = overrides[name] ?? [col, '说明', '首次出现']
+      return [
+        `### ${name}`,
+        '',
+        `| ${cols.join(' | ')} |`,
+        `| ${cols.map(() => '---').join(' | ')} |`,
+        `| 甲 | 主角 | 1 |`,
+        '',
+      ]
+    }),
+    '## 对账',
+    '',
+    '| 项 | 期望 | 实际 | 结论 |',
+    '| --- | --- | --- | --- |',
+    '| 章数 | 3 | 3 | 通过 |',
+    '',
+  ].join('\n')
+}
+
+test('C-25：报告要素四表的表头与契约一致（正向：写得对就不报）', async () => {
+  await withFilled(async (out) => {
+    await writeFile(join(out, '拆书报告.md'), reportText(), 'utf8')
+    const r = await validateOutput({ root: out })
+    assert.deepEqual(
+      r.errors.filter((e) => e.code === 'E_COLUMN' && /拆书报告/.test(e.file)).map((e) => e.message),
+      [],
+      '四表表头都与契约一致时不该报 E_COLUMN',
+    )
+  })
+})
+
+test('C-25：某张要素表的列名被改（如「首次出现」写成「首现」）时报 E_COLUMN', async () => {
+  await withFilled(async (out) => {
+    await writeFile(join(out, '拆书报告.md'), reportText({ 技法: ['技法', '说明', '首现'] }), 'utf8')
+    const r = await validateOutput({ root: out })
+    const hit = r.errors.filter((e) => e.code === 'E_COLUMN' && /技法/.test(e.message))
+    assert.equal(hit.length, 1, `改了一张表的列名，该报 1 条，实际 ${hit.length}`)
+    assert.match(hit[0].message, /技法/, '要点名是哪一张表')
+    assert.match(hit[0].message, /首现/, '要写出实际那一列叫什么，否则人不知道去哪改')
+    assert.match(hit[0].message, /首次出现/, '也要写出期望的列名')
+  })
+})
+
+test('C-25：缺整张要素表（删掉 ### 技法 小节）时报 E_COLUMN，不静默跳过', async () => {
+  await withFilled(async (out) => {
+    const text = reportText().replace(/### 技法[\s\S]*?(?=## 对账)/, '')
+    await writeFile(join(out, '拆书报告.md'), text, 'utf8')
+    const r = await validateOutput({ root: out })
+    const hit = r.errors.filter((e) => e.code === 'E_COLUMN' && /技法/.test(e.message))
+    assert.equal(hit.length, 1, '缺一整张表比改错列名更严重，必须能报出来')
+    assert.match(hit[0].message, /缺小节/, '要说清是缺小节而不是表头不符')
   })
 })

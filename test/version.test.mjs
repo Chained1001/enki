@@ -15,3 +15,13 @@ test('package.json 的 version 与 CHANGELOG 最新版本段一致', () => {
   if (versions.length === 0) return
   assert.equal(versions[0], pkg.version, `CHANGELOG 最新版本 ${versions[0]} 与 package.json 的 ${pkg.version} 不一致，发版步骤 3、4 须同次完成`)
 })
+
+test('contract.mjs 的 CONTRACT_VERSION 与 package.json 的 version 一致', () => {
+  // manifest.contractVersion 取自这个常量，产物靠它自证按哪版契约写成。
+  // 两处不一致时，产物会声称一个并不存在的契约版本，比不写还糟。
+  const pkg = JSON.parse(readFileSync(join(base, 'package.json'), 'utf8'))
+  const src = readFileSync(join(base, 'skills', 'book-breakdown', 'scripts', 'contract.mjs'), 'utf8')
+  const m = /^export const CONTRACT_VERSION = '([^']+)'$/m.exec(src)
+  assert.ok(m, 'contract.mjs 须导出 CONTRACT_VERSION')
+  assert.equal(m[1], pkg.version, `CONTRACT_VERSION ${m[1]} 与 package.json 的 ${pkg.version} 不一致`)
+})

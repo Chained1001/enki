@@ -3,8 +3,9 @@
 // 六类噪音剥离、作者的话归集、三级分卷检测、出版书判定、建目录树、骨架落位、定量指纹、manifest 状态块。
 // 段名、列名、阈值、目录契约唯一来源是 contract.mjs（技术文档 D-01）。
 // 评审 P25：prepare() 拆为导出的 analyze()（纯计算，可读文件不落盘）＋persist()（落盘），对外签名与返回不变。
-// 用法：prepare.mjs <原文 txt> [--out <产物目录>] [--force] [--dry-run] [--json] [--help]
-// 退出码：0 成功，1 业务失败，2 参数错误。写文件：先写临时文件再重命名；已存在的产物目录默认续跑，--force 归档后重建（D-18）。
+// 用法：prepare.mjs <原文 txt> [--out <产物目录>] [--force --i-know] [--dry-run] [--json] [--help]
+// 退出码：0 成功，1 业务失败，2 参数错误。写文件：先写临时文件再重命名；已存在的产物目录默认续跑，--force --i-know 归档后重建（D-18）。
+// --force 单用会报参数错并列出「会丢多少个已填文件」与归档路径（B-07）：归档不是删除，但人要重做一遍。
 import { existsSync, statSync, renameSync } from 'node:fs'
 import { copyFile, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
@@ -12,11 +13,11 @@ import { basename, dirname, extname, join, relative, resolve, sep } from 'node:p
 import { pathToFileURL } from 'node:url'
 import { IoError, readManifest, writeFileAtomic } from './io.mjs'
 import {
-  COLLECTIONS, COLUMNS, EMOTION_TAG_WORDS, ENUMS, FATIGUE_WORDS, PROTAGONIST_FILES, SCENE_MARKERS, SECTIONS, STAGES, THRESHOLDS, TOPICS,
+  COLLECTIONS, COLUMNS, CONTRACT_VERSION, EMOTION_TAG_WORDS, ENUMS, FATIGUE_WORDS, PROTAGONIST_FILES, SCENE_MARKERS, SECTIONS, STAGES, THRESHOLDS, TOPICS,
   mdSkeleton, outlineSkeleton, productPlan, styleSkeleton, tableColumns, tableSkeleton, topicSkeleton,
 } from './contract.mjs'
 
-const USAGE = '用法：prepare.mjs <原文 txt> [--out <产物目录>] [--force] [--dry-run] [--json] [--help]'
+const USAGE = '用法：prepare.mjs <原文 txt> [--out <产物目录>] [--force --i-know] [--dry-run] [--json] [--help]'
 
 // ---------- 中文数字 ----------
 
@@ -178,7 +179,7 @@ export function detectChapters(text) {
   // 超长章标记（spike 卡壳 2：末章混入完本感言/番外/附录时 chars 异常，供批处理预警）。
   const units = chapters.filter((c) => c.isHeading)
   const avg = units.reduce((s, c) => s + c.chars, 0) / (units.length || 1)
-  const longThreshold = Math.max(30000, avg * 8)
+  const longThreshold = Math.max(THRESHOLDS.超长章字数下限, avg * THRESHOLDS.超长章相对均章倍数)
   for (const c of chapters) if (c.chars > longThreshold) c.outlier = true
 
   // 短章合并（D-13）：按合并前的正文章数判断；合并后跌破护栏则回退（评审 P9）。
@@ -396,13 +397,38 @@ export function fingerprint(chapters) {
       情绪标签词密度: +(countWords(c.text, EMOTION_TAG_WORDS) / n * 10000).toFixed(1),
     }
   })
+  // 偏离判定：某章该项偏离全书均值 ≥2σ 才列出（A-07）。
+  // 不能取固定 top-N：一本全书很均匀的书，top-3 只是「相对不那么均匀」的三个，
+  // 读者看不出差别，而结论却写着「这几章偏离」——这是把噪音说成信号。
+  // 3 章以内算不出有意义的标准差，整段标「样本不足」不出结论。
+  const THRESHOLD_SIGMA = 2
+  const MIN_CHAPTERS_FOR_SIGMA = 3
   const deviating = {}
   for (const key of ['句均长', '短句比', '对话占比', '场景切换密度', '情绪标签词密度']) {
     const mean = base[key]
-    deviating[key] = [...perChapter]
-      .sort((a, b) => Math.abs(b[key] - mean) - Math.abs(a[key] - mean))
-      .slice(0, 3)
-      .map((x) => `第${x.ch}章（${x[key]}）`)
+    const vals = perChapter.map((x) => x[key])
+    if (perChapter.length < MIN_CHAPTERS_FOR_SIGMA) {
+      // 样本不足：不判偏离，把「算不出来」这件事写出来，而不是给一个假结论。
+      deviating[key] = [`样本不足（${perChapter.length} 章，不判偏离）`]
+      continue
+    }
+    const variance = vals.reduce((t, v) => t + (v - mean) ** 2, 0) / vals.length
+    const sigma = Math.sqrt(variance)
+    // σ=0（所有章等长）时任何非零偏差都是「相对」的，不构成偏离。
+    if (!(sigma > 0)) {
+      deviating[key] = ['全书各章该指标一致，无偏离章']
+      continue
+    }
+    const hits = perChapter
+      .map((x) => ({ ...x, z: Math.abs(x[key] - mean) / sigma }))
+      .filter((x) => x.z >= THRESHOLD_SIGMA)
+      .sort((a, b) => b.z - a.z)
+    // 上限只为防刷屏（长书真可能几十章偏离），按 z 值从大到小取前 5，
+    // 并在文本里写明「另有 N 章」——不静默截断。
+    const LIMIT = 5
+    const shown = hits.slice(0, LIMIT).map((x) => `第${x.ch}章（${x[key]}，${x.z.toFixed(1)}σ）`)
+    if (hits.length > LIMIT) shown.push(`另有 ${hits.length - LIMIT} 章同样偏离，未列出`)
+    deviating[key] = shown.length ? shown : ['无偏离章（均在 2σ 以内）']
   }
   return { base, deviating, hasQuote: quoted.length > 0 }
 }
@@ -530,7 +556,10 @@ function volumeFileName(v) {
   return `卷${String(v.no).padStart(2, '0')}-${safe}.md`
 }
 
-// 生成全部待写文件：相对路径 → 内容。出版书无分卷总表/卷纲，幕纲骨架按原文单元生成。
+// 生成全部待写文件：相对路径 → 内容。
+// 两类书都建卷纲与分卷总表；区别只在幕怎么落：
+//   网文——幕＝卷内事件弧，卷纲由拆解者按事件弧填，幕纲由卷循环逐幕生成；
+//   出版书——幕＝原文单元，卷纲由脚本按原文单元的章节区间预置，幕纲一份对应一个原文单元。
 export function buildArtifacts({ book, sourceName, chapters, volumes, bookType, fp, notes }) {
   const plan = productPlan({ bookType })
   const files = new Map()
@@ -548,24 +577,35 @@ export function buildArtifacts({ book, sourceName, chapters, volumes, bookType, 
   const authorResult = authorNotesText(notes)
   files.set('原文/作者的话.md', authorResult.text)
   files.set('工作/别名词典.md', tableSkeleton('别名词典', tableColumns('别名词典')))
-  // 逐章记录十二列（Q-22 剧情线插「一句话事件」后；Q-23 再加章末钩型/爽点标记；
-  // 后加「章字数」——该列由本脚本直接写入已知的 chars，不留待填，避免 agent 重复计算）。
+  // 逐章记录十五列（Q-22 剧情线插「一句话事件」后；Q-23 再加章末钩型/爽点强度；A-09 补「爽点类型」；
+  // 后加「章字数」——该列由本脚本直接写入已知的 chars，不留待填，避免 agent 重复计算；
+  // 末尾「故事内时间」「章首句」两列只能由摘要批回填，故留待填）。
   files.set('工作/逐章记录.md', tableSkeleton('逐章记录', tableColumns('逐章记录'),
-    chapters.map((c) => [String(c.no), esc(c.title), String(c.chars), '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）'])))
+    chapters.map((c) => [String(c.no), esc(c.title), String(c.chars), '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）', '（待填）'])))
   for (const [name, types] of Object.entries(COLLECTIONS)) {
     files.set(`故事底本/全书设定/${name}/索引.md`, tableSkeleton(`${name}索引`,
       tableColumns(name === '人物' ? '人物索引' : '集合索引')))
   }
   files.set('故事底本/全书设定/人物/人物关系.md', tableSkeleton('人物关系', tableColumns('人物关系')))
 
-  if (bookType === '网文') {
-    files.set('故事底本/故事剧情/分卷总表.md', tableSkeleton('分卷总表', tableColumns('分卷总表')))
-    for (const v of volumes) files.set(`故事底本/故事剧情/卷纲/${volumeFileName(v)}`, mdSkeleton(`卷纲 ${v.name}`, SECTIONS.卷纲))
-  } else {
+  // 卷层：两类书都建。网文卷纲的「事件弧清单」由拆解者填（脚本给不出事件弧）；
+  // 出版书卷纲的幕清单可以由脚本预置——幕＝原文单元，章节区间在切章时已确定，
+  // 这里只是把它写下来，不涉及判断。
+  files.set('故事底本/故事剧情/分卷总表.md', tableSkeleton('分卷总表', tableColumns('分卷总表')))
+  for (const v of volumes) files.set(`故事底本/故事剧情/卷纲/${volumeFileName(v)}`, mdSkeleton(`卷纲 ${v.name}`, SECTIONS.卷纲))
+
+  if (bookType === '出版') {
+    // 出版书：幕＝原文单元。幕纲文件名带所属卷号，与网文的「幕纲/卷NN-幕NN-名称.md」同形，
+    // 这样校验器不必为两类书写两套树形判断。
     const units = chapters.filter((c) => !(c.no === 0 && c.title === '前言'))
     units.forEach((c, k) => {
       const safe = c.title.replace(/[\\/:*?"<>|]/g, '_')
-      files.set(`故事底本/故事剧情/幕纲/幕${String(k + 1).padStart(2, '0')}-${safe}.md`, mdSkeleton(`幕纲 ${c.title}`, SECTIONS.幕纲))
+      const vol = volumes.find((v) => c.no >= v.startCh && c.no <= v.endCh) ?? volumes[0]
+      const volNo = String(vol?.no ?? 1).padStart(2, '0')
+      files.set(
+        `故事底本/故事剧情/幕纲/卷${volNo}-幕${String(k + 1).padStart(2, '0')}-${safe}.md`,
+        mdSkeleton(`幕纲 ${c.title}`, SECTIONS.幕纲),
+      )
     })
   }
   return { plan, files }
@@ -582,7 +622,7 @@ export function splitAppendix(chapters) {
   // 均值剔除候选章自身，否则异常章会把自己的阈值抬高（自我抵消）。
   const others = chapters.filter((c) => c.isHeading && c !== last)
   const avg = others.reduce((s, c) => s + c.chars, 0) / (others.length || 1)
-  if (last.chars <= Math.max(30000, avg * 8)) return null
+  if (last.chars <= Math.max(THRESHOLDS.超长章字数下限, avg * THRESHOLDS.超长章相对均章倍数)) return null
   const lines = last.text.split(/\r?\n/)
   const idx = lines.findIndex((l) => APPENDIX_MARKER.test(l.trim()))
   if (idx === -1) return null
@@ -633,6 +673,32 @@ async function decodeInput(buffer, src) {
       throw new UsageError(`无法识别原文编码（既非 UTF-8 也非 GBK）：${src}。请先转为 UTF-8 再试`, 'E_ENCODING')
     }
   }
+}
+
+// 量一遍「重建会丢掉多少活」（B-07）：--force 会归档整个产物目录并重建，
+// 归档不等于删除，但人要接着在新目录里重做——真正丢的是已填的内容与已花的会话。
+// 判据直接复用 progress.mjs 的 detectFileState（含「空表格算骨架」）：
+// 自己再写一遍必然走样，实测漏了空表格就会把十几个空索引数成「已填」。
+export async function countFilledArtifacts(outDir) {
+  const { detectFileState } = await import('./progress.mjs')
+  const filled = []
+  const walk = async (dir, prefix) => {
+    let entries
+    try { entries = await readdir(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      const rel = prefix ? `${prefix}/${e.name}` : e.name
+      if (e.isDirectory()) {
+        if (rel === '原文') continue // 原文是复制的，重建会重新生成，不算「活」
+        await walk(join(dir, e.name), rel)
+      } else if (e.name.endsWith('.md')) {
+        let text
+        try { text = await readFile(join(dir, e.name), 'utf8') } catch { continue }
+        if (detectFileState(text, rel) === 'filled') filled.push(rel)
+      }
+    }
+  }
+  await walk(outDir, '')
+  return filled
 }
 
 async function archiveOld(outDir) {
@@ -705,9 +771,18 @@ export async function analyze({ input, out }) {
   const manifest = {
     book,
     bookType,
+    // 产物自证按哪版契约写成（T14）。0.3.0 起卡片字段与散文引句都进校验，
+    // 旧版产物在新版校验器下的差异需要能区分「产物写错了」与「契约变了」。
+    contractVersion: CONTRACT_VERSION,
+    // 生成时间（B-06）：旧产物只有 outDir 与 source，看不出「什么时候拆的」。
+    // 时间取本机时钟，只作记录，不参与任何判定。
+    generatedAt: new Date().toISOString(),
     source: { path: src, bytes: buffer.length, encoding, sha256: createHash('sha256').update(buffer).digest('hex') },
     outDir,
+    // 总量口径（B-06）：光有 totalChars 这个数看不出它到底数了什么——
+    // 是原文全文，还是含附录、含前言、含噪音行？写清楚，别人才能核对。
     totalChars: chapters.reduce((s, c) => s + c.chars, 0),
+    totalCharsNote: '原文正文单元的字数之和：含前言（no=0，若存在），不含附录（单列在 appendix.chars）、不含已剥离的噪音行与作者的话',
     chapterCount: chapters.length,
     volumeCount: volumes.length,
     volumes,
@@ -726,16 +801,34 @@ export async function analyze({ input, out }) {
 }
 
 // 落盘段（评审 P25 拆分）：校验产物目录、--force 归档、续跑对账、写章节/骨架/manifest。
-export async function persist(analysis, { force = false, dryRun = false } = {}) {
+export async function persist(analysis, { force = false, iKnow = false, dryRun = false } = {}) {
   const { src, outDir, book, bookType, encoding, appendix, chapters, volumes, batches, plan, files, manifest } = analysis
 
   // 产物目录已存在：--force 归档重建；否则有 manifest 走续跑对账，无 manifest 拒绝。
   let archived = null
   if (existsSync(outDir)) {
     if (force) {
+      // 二次确认（B-07）：--force 一句话就把整份产物归档重建，此前没有任何阻力。
+      // 归档不是删除，但人要接着在新目录里把内容重做一遍——真正丢的是已填的内容。
+      // 先把「会丢多少」数出来给他看，加 --i-know 才算确认过。
+      if (!iKnow) {
+        const filled = await countFilledArtifacts(outDir)
+        const parent = dirname(outDir)
+        const base = basename(outDir)
+        const entries = new Set(existsSync(parent) ? await readdir(parent) : [])
+        let k = 1
+        while (entries.has(`${base}_旧${k}`)) k += 1
+        const willArchiveTo = join(parent, `${base}_旧${k}`)
+        throw new UsageError(
+          `--force 会归档整个产物目录后重建，${filled.length} 个已填文件需要重做：`
+          + `${filled.slice(0, 5).join('、')}${filled.length > 5 ? ` 等 ${filled.length} 个` : ''}。`
+          + `归档到：${willArchiveTo}。确认要重建请加 --i-know`,
+          'E_FORCE_CONFIRM',
+        )
+      }
       archived = await archiveOld(outDir)
     } else if (!existsSync(join(outDir, '工作', 'manifest.json'))) {
-      throw new UsageError(`产物目录已存在且无 manifest：${outDir}。请换 --out，或用 --force 归档后重建`, 'E_EXISTS')
+      throw new UsageError(`产物目录已存在且无 manifest：${outDir}。请换 --out，或用 --force --i-know 归档后重建`, 'E_EXISTS')
     }
   }
   const resume = !force && archived === null && existsSync(join(outDir, '工作', 'manifest.json'))
@@ -753,6 +846,10 @@ export async function persist(analysis, { force = false, dryRun = false } = {}) 
       totalChars: chapters.reduce((n, c) => n + (c.chars ?? 0), 0),
       volumeCount: volumes.length, volumes, batchCount: batches.length, archived,
       dirs: plan.dirs.length, files: files.size + chapters.length + 1,
+      // 章节列表（C-23）：快速模式要「以脚本的切章口径为准」，就得能拿到这份列表。
+      // 只给序号与标题、不带正文：正文在源文件里，agent 按页读，不需要脚本再复制一遍
+      // （带正文会把整本书从 stdout 灌一遍，还逼调用方处理编码）。
+      chapters: chapters.map((c) => ({ no: c.no, title: c.title, chars: c.chars })),
     }
   }
 
@@ -804,7 +901,7 @@ export async function prepare(opts) {
 }
 
 export function parseArgs(argv) {
-  const options = { input: undefined, out: undefined, force: false, dryRun: false, json: false, help: false }
+  const options = { input: undefined, out: undefined, force: false, iKnow: false, dryRun: false, json: false, help: false }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--out') {
@@ -812,12 +909,17 @@ export function parseArgs(argv) {
       if (!v || v.startsWith('--')) throw new UsageError(`--out 缺少取值。${USAGE}`, 'E_ARGS')
       options.out = v
     } else if (arg === '--force') options.force = true
+    else if (arg === '--i-know') options.iKnow = true
     else if (arg === '--dry-run') options.dryRun = true
     else if (arg === '--json') options.json = true
     else if (arg === '--help' || arg === '-h') options.help = true
     else if (arg.startsWith('--')) throw new UsageError(`未知参数 ${arg}。${USAGE}`, 'E_ARGS')
     else if (options.input === undefined) options.input = arg
     else throw new UsageError(`多余的参数 ${arg}。${USAGE}`, 'E_ARGS')
+  }
+  // --i-know 单用没有意义：它是给 --force 的确认，不是独立动作。
+  if (options.iKnow && !options.force) {
+    throw new UsageError('--i-know 只能与 --force 同用（它是重建的二次确认，不是独立动作）', 'E_ARGS')
   }
   if (!options.help && !options.input) throw new UsageError(USAGE, 'E_ARGS')
   return options
@@ -850,6 +952,12 @@ async function main() {
       // 成本预估（Q-22）：批数即按卷处理的会话单位。dry-run 返回 batchCount，落盘返回 batches（计数）。
       const batchCount = r.batches ?? r.batchCount ?? 0
       console.log(`规模预告：${r.chapterCount} 章 / ${batchCount} 批（每批 ≤20 章；批数即按卷处理的会话单位，全书投入≈${batchCount} 个批次）`)
+      // 章节列表（C-23）：快速模式拿这份列表当唯一口径，不再自己手切。
+      // 只印标题不印正文——正文在源文件里，需要时按章号去读。
+      if (r.chapters?.length) {
+        console.log(`章节列表（${r.chapters.length} 章）：`)
+        for (const c of r.chapters) console.log(`  ${c.no}. ${c.title}（${c.chars} 字）`)
+      }
     }
   } catch (error) {
     if (options.json) {

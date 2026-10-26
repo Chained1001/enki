@@ -11,13 +11,14 @@
 //
 // 用法：
 //   node entity-index.mjs <产物目录> --list [--top N]   列出实体与出现次数（紧凑）
-//   node entity-index.mjs <产物目录> --entity 张三       查单个实体的章号
+//   node entity-index.mjs <产物目录> --entity 张三       查单个实体的章号（首现章以此为准，不要手数）
+//   node entity-index.mjs <产物目录> --sample 次要角色   改取证章数档位（主角/次要角色/集合条目，或 ≥2 的整数）
 //   node entity-index.mjs <产物目录> --json             输出全量 JSON
 //   node entity-index.mjs <产物目录> --out 路径.json    落盘
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { tableColumns } from './contract.mjs'
+import { tableColumns, THRESHOLDS } from './contract.mjs'
 import { writeFileAtomic } from './io.mjs'
 import { parseRow } from './validate-output.mjs'
 
@@ -85,8 +86,21 @@ export function splitTopLevel(s) {
   return out.map((x) => x.trim()).filter((x) => x && x !== PLACEHOLDER)
 }
 
-// 纯函数：给定表行，返回 { 实体名 → {类型, 章号[], 首现章, 末次章} }
-export function buildIndex(lines) {
+// 纯函数：给定表行，返回 { 实体名 → {类型, 章号[], 首现章, 末次章, 分卷章数, 视角章[]} }
+//
+// 分卷章数与视角章是本轮补的（C-29）：08 的主次判定要「全局＋分卷双口径出场」与
+// 「视角章占比」，而脚本此前只给全局。缺这两项时，08 的原文只能让 agent 自己数——
+// 数同一件事实在两个人手里就会有两个结果，且数错了产物上看不出来。
+//
+// 分卷归属按 manifest 的卷区间算（chapters[].no 落在 [startCh, endCh]）。
+// volumes 不传时退化成「整本当一卷」，与 volume-stats 的口径一致。
+export function buildIndex(lines, opts = {}) {
+  const volumes = opts.volumes ?? []
+  const volOf = (no) => {
+    if (!volumes.length) return 1
+    const v = volumes.find((x) => no >= x.startCh && no <= x.endCh)
+    return v ? v.no : 0 // 0 = 落在所有卷区间之外（切卷与切章不一致）
+  }
   const cols = tableColumns('逐章记录')
   const iNo = cols.indexOf('全局章号')
   const iPov = cols.indexOf('视角人物')
@@ -97,6 +111,7 @@ export function buildIndex(lines) {
   let headerSeen = false
   let chapters = 0
   let pending = 0
+  const chapterNos = []
 
   for (const line of lines) {
     const cells = parseRow(line)
@@ -109,6 +124,7 @@ export function buildIndex(lines) {
     const no = Number(cells[iNo])
     if (!Number.isFinite(no)) continue
     chapters += 1
+    chapterNos.push(no)
 
     // 该行是否已填（未填的行不参与索引，避免把「（待填）」当实体）
     const filled = [cells[iPov], cells[iPlace], cells[iCast]].some(
@@ -123,26 +139,48 @@ export function buildIndex(lines) {
       if (!name || name === PLACEHOLDER) return
       let e = index.get(name)
       if (!e) {
-        e = { 名称: name, 类型: type, 章号: [], 首现章: no, 末次章: no }
+        e = { 名称: name, 类型: type, 章号: [], 首现章: no, 末次章: no, 分卷章数: {}, 视角章: [] }
         index.set(name, e)
       }
       if (!e.章号.includes(no)) e.章号.push(no)
+      const v = volOf(no)
+      // 分卷计数只在首次遇到该章时加。同名实体可能同时出现在「视角人物」与
+      // 「出场人物」两格，不去重会把同一章算两遍，占比就超过 100%。
+      if (!e.__seen) e.__seen = new Set()
+      if (!e.__seen.has(no)) { e.__seen.add(no); e.分卷章数[v] = (e.分卷章数[v] ?? 0) + 1 }
       if (no < e.首现章) e.首现章 = no
       if (no > e.末次章) e.末次章 = no
     }
 
-    for (const n of splitEntities(cells[iPov])) add(n, '人物')
+    // 视角人物单独记：主次判定要看「这个人是视角人物的章数占比」，
+    // 它和「出场章数」不是一回事——出场可能是被别人看见，视角是他在看。
+    for (const n of splitEntities(cells[iPov])) {
+      add(n, '人物')
+      const e = index.get(n)
+      if (e && !e.视角章.includes(no)) e.视角章.push(no)
+    }
     for (const n of splitEntities(cells[iPlace])) add(n, '地点')
     for (const n of splitEntities(cells[iCast])) add(n, '人物')
   }
 
-  for (const e of index.values()) e.章号.sort((a, b) => a - b)
-  return { index, chapters, pending, headerSeen }
+  for (const e of index.values()) {
+    e.章号.sort((a, b) => a - b)
+    e.视角章.sort((a, b) => a - b)
+    delete e.__seen // 内部去重集合不进输出（JSON 里出现 Set 会变成 {}，看着像数据其实不是）
+  }
+  // 每卷的章数：分卷占比的分母。用实际读到的章数而不是卷区间长度——
+  // 卷区间是切卷脚本给的，实际写了记录的可能少几章（中断续跑时常见）。
+  const volChapters = {}
+  for (const no of chapterNos) volChapters[volOf(no)] = (volChapters[volOf(no)] ?? 0) + 1
+  return { index, chapters, pending, headerSeen, volChapters }
 }
 
 // 采样建议：给一个实体的章号，挑出最值得读原文的几章（首现/末次/中段/高光）。
 // 阶段 5 的卡片只该读这几章，不该读该实体的全部出场章——主角可能出现在 600 章里。
-export function sampleChapters(list, max = 4) {
+//
+// 默认值取 contract 的「取证章数_主角」（6）：08-设定库 的表格承诺「主角 ≤6 章」，
+// 而本函数此前硬写 4，那句承诺从来没被兑现过（C-13）。次要角色/集合条目用 --sample 指定。
+export function sampleChapters(list, max = THRESHOLDS.取证章数_主角) {
   if (list.length <= max) return list.slice()
   const picked = new Set()
   picked.add(list[0]) // 首现：定义与初登场描写
@@ -155,10 +193,52 @@ export function sampleChapters(list, max = 4) {
   return [...picked].sort((a, b) => a - b)
 }
 
+// 档位名 → 上限。--sample 只认这三个键，避免随手传个 999 又把「卡片采样」变成「读全书」。
+export const SAMPLE_TIERS = {
+  主角: THRESHOLDS.取证章数_主角,
+  次要角色: THRESHOLDS.取证章数_次要角色,
+  集合条目: THRESHOLDS.取证章数_集合条目,
+}
+
 // ---------- CLI ----------
 
+const USAGE =
+  '用法：node entity-index.mjs <产物目录> [--list [--top N]] [--entity 名称] [--sample 档位|N] [--json] [--out 路径] [--help]'
+
+const HELP = `${USAGE}
+
+从「工作/逐章记录.md」反转出实体→章号索引，给出首现章、分卷出场、视角章与建议取证章。
+
+参数：
+  <产物目录>        含 工作/逐章记录.md 的拆解产物目录
+  --list            列出实体与出现次数（默认 --top 50）
+  --top N           配合 --list，只显示前 N 个
+  --entity 名称      查单个实体的章号与建议取证章
+  --sample 档位|N    取证章上限：主角/次要角色/集合条目，或 ≥2 的整数
+  --json            stdout 只输出一个 { ok, errors, data } 对象
+  --out 路径         把 JSON 落盘（不写 stdout）
+  --help            输出本说明并退出`
+
+class CliError extends Error {
+  constructor(message, code = 'E_ARGS') {
+    super(message)
+    this.code = code
+  }
+}
+
+// --json 声明后，成功与失败都只输出一个 { ok, errors, data } 对象（规范 02「接口」）。
+// data 保留原字段；非 --json 路径的默认输出保持原样。
+function emitFailure({ code, message, data = {}, exitCode = 1, json = false, withCode = true }) {
+  if (json) {
+    console.log(JSON.stringify({ ok: false, errors: [{ code, file: '', message }], data }, null, 2))
+  } else {
+    console.error(withCode ? `${code}：${message}` : message)
+  }
+  process.exitCode = exitCode
+}
+
 function parseArgs(argv) {
-  const out = { dir: null, list: false, entity: null, json: false, out: null, top: 50 }
+  const out = { dir: null, list: false, entity: null, json: false, help: false, out: null, top: 50, sample: THRESHOLDS.取证章数_主角 }
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i]
     if (a === '--list') out.list = true
@@ -166,16 +246,41 @@ function parseArgs(argv) {
     else if (a === '--json') out.json = true
     else if (a === '--out') out.out = argv[++i]
     else if (a === '--top') out.top = Number(argv[++i])
-    else if (!a.startsWith('-')) out.dir = a
+    else if (a === '--help' || a === '-h') out.help = true
+    else if (a === '--sample') {
+      // 认三档名字，也认正整数（给「这本书主角出场太少，就采 4 章」这类临时收窄留口子）。
+      const v = argv[++i]
+      if (v in SAMPLE_TIERS) out.sample = SAMPLE_TIERS[v]
+      else if (/^\d+$/.test(v ?? '') && Number(v) >= 2) out.sample = Number(v)
+      else throw new CliError(`--sample 取值「${v}」不合法：应为 ${Object.keys(SAMPLE_TIERS).join('/')} 或 ≥2 的整数`)
+    } else if (a.startsWith('-')) throw new CliError(`未知参数 ${a}。${USAGE}`)
+    else if (out.dir === null) out.dir = a
+    else throw new CliError(`多余的参数 ${a}。${USAGE}`)
   }
   return out
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2))
+  let args
+  try {
+    args = parseArgs(process.argv.slice(2))
+  } catch (error) {
+    emitFailure({
+      code: error.code ?? 'E_ARGS',
+      message: error.message,
+      exitCode: 2,
+      json: process.argv.includes('--json'),
+      withCode: false,
+    })
+    return
+  }
+  if (args.help) {
+    console.log(HELP)
+    return
+  }
   if (!args.dir) {
-    console.error('用法：node entity-index.mjs <产物目录> [--list [--top N]] [--entity 名称] [--json] [--out 路径]')
-    process.exit(2)
+    emitFailure({ code: 'E_ARGS', message: USAGE, exitCode: 2, json: args.json, withCode: false })
+    return
   }
 
   const file = join(args.dir, '工作', '逐章记录.md')
@@ -183,18 +288,35 @@ async function main() {
   try {
     raw = await readFile(file, 'utf8')
   } catch (error) {
-    console.error(`逐章记录不可读（${file}）：${error.message}`)
-    process.exit(1)
+    emitFailure({ code: 'E_FILE', message: `逐章记录不可读（${file}）：${error.message}`, json: args.json, withCode: false })
+    return
   }
 
-  const { index, chapters, pending, headerSeen } = buildIndex(raw.split(/\r?\n/))
+  // 卷区间来自 manifest（切卷时写好的），不再让 08 自己按章号推分卷边界。
+  let volumes = []
+  try {
+    const m = JSON.parse(await readFile(join(args.dir, '工作', 'manifest.json'), 'utf8'))
+    volumes = (m.volumes ?? []).map((v) => ({ no: v.no, startCh: v.startCh, endCh: v.endCh }))
+  } catch { /* 没有 manifest 时退化成整本一卷，与 volume-stats 一致 */ }
+
+  const { index, chapters, pending, headerSeen, volChapters } = buildIndex(raw.split(/\r?\n/), { volumes })
   if (!headerSeen) {
-    console.error('未找到逐章记录表头（须与 contract 的列名逐字一致）')
-    process.exit(1)
+    emitFailure({
+      code: 'E_HEADER',
+      message: '未找到逐章记录表头（须与 contract 的列名逐字一致）',
+      json: args.json,
+      withCode: false,
+    })
+    return
   }
   if (pending === chapters) {
-    console.error(`逐章记录 ${chapters} 行全是占位符，尚未填写；请先完成阶段 4`)
-    process.exit(1)
+    emitFailure({
+      code: 'E_UNFILLED',
+      message: `逐章记录 ${chapters} 行全是占位符，尚未填写；请先完成阶段 4`,
+      json: args.json,
+      withCode: false,
+    })
+    return
   }
 
   const all = [...index.values()].sort((a, b) => b.章号.length - a.章号.length || a.首现章 - b.首现章)
@@ -203,22 +325,66 @@ async function main() {
     const e = index.get(args.entity)
     if (!e) {
       const near = all.filter((x) => x.名称.includes(args.entity) || args.entity.includes(x.名称)).slice(0, 5)
-      console.error(`索引里没有「${args.entity}」${near.length ? `；相近的有：${near.map((x) => x.名称).join('、')}` : ''}`)
-      process.exit(1)
+      emitFailure({
+        code: 'E_NOT_FOUND',
+        message: `索引里没有「${args.entity}」${near.length ? `；相近的有：${near.map((x) => x.名称).join('、')}` : ''}`,
+        json: args.json,
+        withCode: false,
+      })
+      return
+    }
+    const suggestion = sampleChapters(e.章号, args.sample)
+    if (args.json) {
+      console.log(JSON.stringify({
+        ok: true,
+        errors: [],
+        data: {
+          实体: e,
+          采样上限: args.sample,
+          建议取证章: suggestion,
+          分卷章数: volChapters,
+        },
+      }, null, 2))
+      return
     }
     console.log(`${e.名称}（${e.类型}）：出现 ${e.章号.length} 章，首现第 ${e.首现章} 章，末次第 ${e.末次章} 章`)
+    // 视角章与分卷口径一起给（C-29）：主次判定要「全局＋分卷」两个口径，
+    // 缺了分卷那一半，08 就只能自己按章号数——同一件事实两个人数出两个值。
+    const povN = e.视角章.length
+    console.log(`视角人物章：${povN} 章（占出场 ${(povN / e.章号.length * 100).toFixed(1)}%）`)
+    const volParts = Object.entries(e.分卷章数)
+      .sort((a, b) => Number(a[0]) - Number(b[0]))
+      .map(([v, c]) => `第${v}卷 ${c}/${volChapters[v] ?? '?'} 章（${((c / (volChapters[v] || 1)) * 100).toFixed(1)}%）`)
+    if (volParts.length) console.log(`分卷出场：${volParts.join('；')}`)
     console.log(`全部出场章：${e.章号.join(', ')}`)
-    console.log(`建议取证章（≤4 章，够建卡）：${sampleChapters(e.章号).join(', ')}`)
+    console.log(`建议取证章（≤${args.sample} 章，够建卡）：${suggestion.join(', ')}`)
     return
   }
 
   if (args.list) {
+    const listed = all.slice(0, args.top)
+    if (args.json) {
+      console.log(JSON.stringify({
+        ok: true,
+        errors: [],
+        data: {
+          实体数: all.length,
+          已填章数: chapters - pending,
+          章节数: chapters,
+          未填章数: pending,
+          采样上限: args.sample,
+          分卷章数: volChapters,
+          实体: listed,
+        },
+      }, null, 2))
+      return
+    }
     console.log(`实体 ${all.length} 个（已填 ${chapters - pending} 章 / 共 ${chapters} 章；未填 ${pending} 章不参与索引）`)
     console.log('')
-    console.log('| 实体 | 类型 | 出现章数 | 首现章 | 末次章 |')
-    console.log('|---|---|---|---|---|')
-    for (const e of all.slice(0, args.top)) {
-      console.log(`| ${e.名称} | ${e.类型} | ${e.章号.length} | ${e.首现章} | ${e.末次章} |`)
+    console.log('| 实体 | 类型 | 出现章数 | 视角章数 | 首现章 | 末次章 |')
+    console.log('|---|---|---|---|---|---|')
+    for (const e of listed) {
+      console.log(`| ${e.名称} | ${e.类型} | ${e.章号.length} | ${e.视角章.length} | ${e.首现章} | ${e.末次章} |`)
     }
     if (all.length > args.top) console.log(`\n（只显示前 ${args.top} 个，用 --top N 调整）`)
     return
@@ -229,14 +395,24 @@ async function main() {
       章节数: chapters,
       未填章数: pending,
       实体数: index.size,
-      实体: all.map((e) => ({ ...e, 建议取证章: sampleChapters(e.章号) })),
+      采样上限: args.sample,
+      分卷章数: volChapters,
+      实体: all.map((e) => ({
+        ...e,
+        视角章占比: e.章号.length ? Number((e.视角章.length / e.章号.length).toFixed(4)) : 0,
+        建议取证章: sampleChapters(e.章号, args.sample),
+      })),
     }
     const text = JSON.stringify(payload, null, 1)
     if (args.out) {
       await writeFileAtomic(args.out, `${text}\n`)
-      console.log(`已写出 ${args.out}（实体 ${index.size} 个）`)
+      if (args.json) {
+        console.log(JSON.stringify({ ok: true, errors: [], data: { ...payload, out: args.out } }, null, 2))
+      } else {
+        console.log(`已写出 ${args.out}（实体 ${index.size} 个）`)
+      }
     } else {
-      console.log(text)
+      console.log(JSON.stringify({ ok: true, errors: [], data: payload }, null, 2))
     }
     return
   }

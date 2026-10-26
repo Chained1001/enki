@@ -100,7 +100,7 @@ test('目录缺少 SKILL.md 报 E_NO_SKILL_MD', async () => {
   assert.deepEqual(codes(await validateRepo(join(fixtures, 'invalid', 'no-skill-md'))), ['E_NO_SKILL_MD'])
 })
 
-test('README 技能表缺该技能的行时报 E_INDEX', async () => {
+test('README 技能表缺该技能的行时报 E_README_INDEX', async () => {
   const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises')
   const root = await mkdtemp(join(await tmpBase(), 'idx-'))
   try {
@@ -109,7 +109,7 @@ test('README 技能表缺该技能的行时报 E_INDEX', async () => {
     await writeFile(join(dir, 'SKILL.md'), skill(OK), 'utf8')
     // README 有技能表但没有任何以 sample 开头的行（散文提及不算入索引）。
     await writeFile(join(root, 'README.md'), '# 项目\n\n| 技能 | 说明 |\n| --- | --- |\n| other | 别的技能 |\n', 'utf8')
-    assert.deepEqual(codes(await validateRepo(root)), ['E_INDEX'])
+    assert.deepEqual(codes(await validateRepo(root)), ['E_README_INDEX'])
   } finally {
     await rm(root, { recursive: true, force: true })
   }
