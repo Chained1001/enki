@@ -41,6 +41,7 @@ npx skills add Chained1001/enki
 
 | 命令 | 作用 |
 |---|---|
+| `npm run check` | docs-check + 静态校验 + 全部测试 |
 | `npm run validate` | 静态校验 `skills/` 与 README 技能表 |
 | `npm test` | 版本守卫＋运行全部测试 |
 

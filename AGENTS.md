@@ -77,34 +77,7 @@
 
 ### 真书规模断言（`test/realbook-scale.test.mjs`）
 
-把十本实测书的（类型、章数、卷数、均章）写成断言，判定逻辑一漂移就变红。原文不入库，测试在运行时读主机上的原文；目录不存在或缺某本书时，对应用例 `skip` 并写明原因，不会误报失败。
-
-原文目录默认为 `C:/Users/22940/Desktop/开发/辅助内容/小说原文`，可用 `ENKI_REALBOOK_DIR` 覆盖：
-
-```powershell
-$env:ENKI_REALBOOK_DIR = 'D:\小说原文'; npm test
-```
-
-基线来自同一条检测流水线（`detectChapters` → `detectVolumes` → `detectBookType`），均章口径为「正文单元字数之和 ÷ 正文单元数（不含前言）」，与 `detectBookType` 内部一致。**改动阈值或判定条件后若这些用例变红，先确认是想要的行为变更，再更新基线数字**——不要为了让测试变绿去改断言。
-
-新增实测书时，用下面的脚本采集数字再填进 `BASELINE`：
-
-```js
-// 放到仓库内任意位置执行：node collect.mjs
-import { readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
-import { detectBookType, detectChapters, detectVolumes }
-  from 'file:///C:/Users/22940/Desktop/开发/网文拆书/Enki/skills/book-breakdown/scripts/prepare.mjs'
-const SRC = process.env.ENKI_REALBOOK_DIR ?? 'C:/Users/22940/Desktop/开发/辅助内容/小说原文'
-for (const f of readdirSync(SRC).filter((x) => x.endsWith('.txt'))) {
-  const text = readFileSync(join(SRC, f), 'utf8')
-  const chapters = detectChapters(text)
-  const volumes = detectVolumes(chapters, text.split(/\r?\n/))
-  const units = chapters.filter((c) => !(c.no === 0 && c.title === '前言'))
-  const avg = units.length ? Math.round(units.reduce((s, c) => s + c.chars, 0) / units.length) : 0
-  console.log(`  { file: '${f}', bookType: '${detectBookType(chapters)}', chapterCount: ${chapters.length}, volumeCount: ${volumes.length}, avg: ${avg} },`)
-}
-```
+跑之前用 `ENKI_REALBOOK_DIR` 指向本机原文目录；基线是同一检测流水线（类型、章数、卷数、均章）算出的，改阈值后若用例变红，先确认是想要的行为变更再更新基线数字。采集脚本与本机路径说明见 `test/README.md`。
 
 ## 提交
 
@@ -121,19 +94,13 @@ for (const f of readdirSync(SRC).filter((x) => x.endsWith('.txt'))) {
 ## 禁止事项
 
 - 禁止把整本小说复制进仓库，改为只写路径（原因：语料不入库）。
+- 禁止不先搜索已有 Issue 与 PR 就动手，改为先搜重再实现（原因：重复实现与冲突到审查才暴露）。
+- 禁止 AI 产出的改动未经人过完整 diff 就提交，改为人核后提交（原因：机器门禁查不出语义越权）。
 
 「原因」写可核查的后果，或写会被哪条检查发现，不写「更清晰」「更好维护」。
 
-## Agent skills
+## Agent 约定
 
-### Issue tracker
-
-Issues live as GitHub issues in `Chained1001/enki`, created and read with the `gh` CLI. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Five canonical triage roles map one-to-one to labels of the same name (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context: one `GLOSSARY.md` at the repo root, no `GLOSSARY-MAP.md`. See `docs/agents/domain.md`.
+- Issue 记在 GitHub `Chained1001/enki`，用 `gh` CLI 建与读；见 `docs/agents/issue-tracker.md`。
+- 五个 triage 角色与同名标签一一对应（`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`）；见 `docs/agents/triage-labels.md`。
+- 单上下文：术语表只有根目录一份 `GLOSSARY.md`，没有 `GLOSSARY-MAP.md`；见 `docs/agents/domain.md`。

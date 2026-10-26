@@ -16,6 +16,9 @@
 - 版本与 CHANGELOG 收口（P1-3）：去重 0.3.0 重复条目、破坏性变更加 **BREAKING:**、补 CONTRACT_VERSION 发版步骤、打 v0.3.0 tag
 - 错误码拆分（P1-5）：02 只留通用码、项目码移入 `docs/技术/错误码.md`，恢复 `E_ARGS`、补 `E_SOURCE` 定义，README 索引码改名 `E_README_INDEX`，脚本清单加「层级」列，新增 `test/error-codes.test.mjs` 门禁
 - docs-check 门禁（P1-4）：AGENTS 指针与 GLOSSARY 格式/拼音序进 `npm run check`，CI 与 pre-commit 改走 check
+- 长参考件补目录（P2-5）：`判据/人物提炼判据.md` 与 `解读/人物提炼解读.md` 开头加 `## 目录`，`索引.md` 由脚本重生成
+- 模板与发布字段（P3-2、P3-4）：`templates/root/AGENTS.md` 标注为手工骨架，两条禁令同步进根 AGENTS 的「禁止事项」，`package.json` 加 `files: ["skills"]`
+- AGENTS 精简（P3-3）：真书规模断言整段移入 `test/README.md`，三段英文约定收成 `## Agent 约定` 三条指针
 
 ### Added
 
