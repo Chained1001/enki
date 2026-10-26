@@ -178,6 +178,17 @@ test('人物关系模板：表头与 COLUMNS.人物关系 逐字一致（B-03）
   assert.deepEqual(cols, COLUMNS.人物关系)
 })
 
+test('幕纲「场次表」：表头与 COLUMNS.场次表 逐字一致，且保留「关键缺席」列', () => {
+  // 这张表不参与交付校验的表头比对（幕纲文件多、短幕可能只有一场，强制会误伤），
+  // 所以表头漂移只能靠这一条守住——它是「谁在、谁对谁、谁听见」唯一的结构化落点。
+  const text = read('幕纲模板.md')
+  const header = text.split(/\r?\n/).find((l) => l.trim().startsWith('| 场号 |'))
+  assert.ok(header, '幕纲模板应有「场次表」表头')
+  const cols = header.trim().slice(1, -1).split('|').map((c) => c.trim())
+  assert.deepEqual(cols, COLUMNS.场次表)
+  assert.ok(cols.includes('关键缺席'), '「关键缺席」必须在列里——被议论的人不在场时，这句台词的分量完全不同')
+})
+
 test('三份新模板都写明无值写法（不是留空）', () => {
   for (const name of ['人物索引模板.md', '集合索引模板.md', '人物关系模板.md']) {
     const text = read(name)
@@ -207,12 +218,14 @@ test('专题模板：注明结构说明段不参与段名校验（B-07）', () =
   for (const seg of SECTIONS.专题) assert.ok(text.includes(seg), `专题模板缺槽位段「${seg}」`)
 })
 
-// ---------- 逐章记录十三列 ----------
+// ---------- 逐章记录十五列 ----------
 
-test('逐章记录 13 列：「爽点强度」正名、「爽点类型」新增，且模板表头与契约一致（C-01）', () => {
-  assert.equal(COLUMNS.逐章记录.length, 13, '逐章记录应为 13 列')
+test('逐章记录 15 列：「爽点强度」正名、「爽点类型」新增、「故事内时间」「章首句」末两列，且模板表头与契约一致（C-01，§2.6-8，三轮复测）', () => {
+  assert.equal(COLUMNS.逐章记录.length, 15, '逐章记录应为 15 列')
   assert.equal(COLUMNS.逐章记录[11], '爽点强度')
   assert.equal(COLUMNS.逐章记录[12], '爽点类型')
+  assert.equal(COLUMNS.逐章记录[13], '故事内时间')
+  assert.equal(COLUMNS.逐章记录[14], '章首句')
   assert.ok(!COLUMNS.逐章记录.includes('爽点标记'), '「爽点标记」应已正名为「爽点强度」')
   const text = read('逐章记录模板.md')
   const header = text.split(/\r?\n/).find((l) => l.trim().startsWith('| 全局章号 |'))
@@ -222,7 +235,7 @@ test('逐章记录 13 列：「爽点强度」正名、「爽点类型」新增�
   // 分隔行列数也要对上
   const lines = text.split(/\r?\n/)
   const sep = lines[lines.indexOf(header) + 1]
-  assert.equal(sep.trim().slice(1, -1).split('|').length, 13, '分隔行应为 13 格')
+  assert.equal(sep.trim().slice(1, -1).split('|').length, 15, '分隔行应为 15 格')
 })
 
 test('爽点类型只在强度为「无」时可空，模板写明了这条条件（C-01）', () => {

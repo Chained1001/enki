@@ -511,8 +511,8 @@ test('标题含竖线的章：产物表行不裂列、文件名净化（A-4）',
     const row = record.split(/\r?\n/).find((l) => l.includes('左') && l.includes('右'))
     assert.ok(row, '逐章记录应含该章行')
     assert.ok(row.includes('左\\|右'), '标题中的竖线应转义')
-    // 列数演进：9 列→11 列（Q-23/Q-24）→12 列（章字数）→13 列（A-09 加爽点类型），首尾竖线共 15 段。
-    assert.equal(row.replace(/\\\|/g, '0').split('|').length, 15, '13 列不裂列（首尾竖线共 15 段）')
+    // 列数演进：…→13 列（A-09 加爽点类型）→14 列（故事内时间）→15 列（章首句），首尾竖线共 17 段。
+    assert.equal(row.replace(/\\\|/g, '0').split('|').length, 17, '15 列不裂列（首尾竖线共 17 段）')
 
     const manifest = JSON.parse(readFileSync(join(r.outDir, '工作', 'manifest.json'), 'utf8'))
     assert.equal(manifest.chapters[0].title, '第一章 左|右', 'manifest 保留原始标题')
@@ -533,7 +533,7 @@ test('UTF-8 BOM 原文可处理：BOM 不进正文（A-4）', async () => {
 
 // ---------- 产物增强三件套（票C：Q-22，2026-10-23）----------
 
-test('逐章记录十三列：章字数紧跟标题、剧情线仍第 8 列、爽点强度与类型接在情绪后（A-3，Q-23/Q-24、A-09 跟进）', async () => {
+test('逐章记录十五列：章字数紧跟标题、剧情线仍第 8 列、爽点强度与类型接在情绪后、故事内时间与章首句末两列（A-3，Q-23/Q-24、A-09、§2.6-8、三轮复测跟进）', async () => {
   await withDir('prepare-q23-col', async ({ dir }) => {
     const src = await writeSample(dir, '十一列书.txt', SAMPLE)
     const r = await prepare({ input: src })
@@ -542,18 +542,20 @@ test('逐章记录十三列：章字数紧跟标题、剧情线仍第 8 列、�
     const header = lines.find((l) => l.startsWith('| 全局章号'))
     assert.ok(header, '应含表头行')
     const cols = header.slice(1, -1).split('|').map((c) => c.trim())
-    assert.equal(cols.length, 13, '表头十三列')
+    assert.equal(cols.length, 15, '表头十五列')
     assert.equal(cols[2], '章字数', '章字数紧跟标题（脚本填，不由 agent 判断）')
     assert.equal(cols[6], '一句话事件', '剧情线插在「一句话事件」后')
     assert.equal(cols[7], '剧情线')
     assert.equal(cols[8], '伏笔埋/收', '「伏笔埋/收」仍在剧情线后')
     assert.equal(cols[10], '章末钩型', '章末钩型接在情绪后（Q-23）')
     assert.equal(cols[11], '爽点强度', '爽点强度接在钩型后（A-09 正名，原「爽点标记」）')
-    assert.equal(cols[12], '爽点类型', '爽点类型为末列（A-09：只有强度统计不出「哪种爽点反复用」）')
+    assert.equal(cols[12], '爽点类型', '爽点类型在故事内时间前（A-09：只有强度统计不出「哪种爽点反复用」）')
+    assert.equal(cols[13], '故事内时间', '故事内时间在章首句前（§2.6 第 8 项：卷级时间跨度看不出「过了多久」）')
+    assert.equal(cols[14], '章首句', '章首句为末列（三轮复测：开场方式唯一整项崩掉，别的列覆盖不到）')
     const dataRows = lines.filter((l) => /^\| \d/.test(l))
     assert.equal(dataRows.length, 4, '行数＝章节数（含前言）')
     for (const row of dataRows) {
-      assert.equal(row.slice(1, -1).split('|').length, 13, `每行 13 格：${row.slice(0, 30)}`)
+      assert.equal(row.slice(1, -1).split('|').length, 15, `每行 15 格：${row.slice(0, 30)}`)
     }
   })
 })
