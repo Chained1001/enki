@@ -22,6 +22,7 @@
 
 ### Added
 
+- 评测补齐（P2-4）：新增结构化主模式、反向仿写、出版书路径 3 条用例；基线待真实 agent 运行
 - `test/process-paths.test.mjs`：文档里的过程路径必须通过契约，含旧路径反例与关键路径在场断言
 - `test/script-invocations.test.mjs`：技能文档里的脚本调用必须是 `node scripts/名称.mjs`，且目标脚本真实存在
 - `test/agent-schema.test.mjs`：子代理输出表与 `AGENT_REVIEW` 一致，`10` 只引用不再复写字段
