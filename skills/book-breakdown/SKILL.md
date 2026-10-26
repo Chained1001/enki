@@ -99,7 +99,7 @@ disable-model-invocation: true
 **05–09 每个阶段收口前，跑一次进度模式校验**：
 
 ```
-node ../scripts/validate-output.mjs <产物目录> --mode progress
+node scripts/validate-output.mjs <产物目录> --mode progress
 ```
 
 判读规则：

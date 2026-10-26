@@ -2,6 +2,21 @@
 
 所有值得记录的变更都写在这里。格式遵循 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/)。
 
+## [Unreleased]
+
+### Changed
+
+- 过程路径对齐（P0-2）：装置初版/回填改为 `工作/增量/阶段06-装置.md` / `工作/增量/阶段07-装置-卷N.md`，分卷片段统一为 `工作/逐章记录-卷N.md`、`工作/伏笔台账-卷N.md`、`工作/别名-卷N.md`（`工作/` 顶层），`工作/增量/裁决.json` 纳入契约
+- Q-64 的「统一到增量/」按 contract 与 merge-foreshadow 的实际口径修正
+- 脚本调用统一为 `node scripts/名称.mjs`（P0-3）：`SKILL.md` 与 8 个流程文件（01、04–10）共 26 处调用
+- 出处核验子代理字段对齐（P0-4）：`contract.mjs` 新增 `AGENT_REVIEW`（输入 6 字段 / 输出 8 字段），`agents/出处核验.md` 与 `10` 统一引用，`裁决.json` 从 5 字段改为 8 字段
+- CI 触发分支改为 `[master, main]`（P0-1），默认分支不再绕过门禁
+
+### Added
+
+- `test/process-paths.test.mjs`：文档里的过程路径必须通过契约，含旧路径反例与关键路径在场断言
+- `test/script-invocations.test.mjs`：技能文档里的脚本调用必须是 `node scripts/名称.mjs`，且目标脚本真实存在
+- `test/agent-schema.test.mjs`：子代理输出表与 `AGENT_REVIEW` 一致，`10` 只引用不再复写字段
 
 ## [0.3.0] - 2026-10-25
 
