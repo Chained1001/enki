@@ -4,218 +4,28 @@
 // 段名、列名、目录契约唯一来源是 contract.mjs（技术文档 D-01）。
 // 用法：validate-output.mjs <产物目录> [--mode deliver|progress] [--json] [--help]
 // 退出码：0 通过或需修改或进行中，1 校验失败，2 参数错误。只读不写。
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
-import { IoError, readManifest } from './io.mjs'
+import { readManifest } from './io.mjs'
 import { pathToFileURL } from 'node:url'
 import {
   COLLECTIONS, CONTRACT_VERSION, ENUMS, QUOTE_PATTERN, QUOTE_RULE, SECTIONS, SOURCE_META_LABELS, SOURCE_PATTERN, THRESHOLDS,
   VARIABLE_FILE_RULES, VOL_TABLE_PAIRS, productPlan, tableColumns,
 } from './contract.mjs'
+import { CARD_FIELDS, findLineGaps, peakIntensityOf } from './validate/checks.mjs'
+import { parseArgs, runCli } from './validate/cli.mjs'
+import {
+  arcRows, arcTable, countFiles, firstTable, headings, isPlaceholder, lcsLen, looksUnfilled,
+  parseRow, sectionBody, sectionText, topicVerdict, walkFiles,
+} from './validate/text.mjs'
+
+// 公开导出保持不变：现有测试与脚本从本文件 import 这些名字，拆分只换实现位置。
+export { CARD_FIELDS, findLineGaps, parseArgs, parseRow, peakIntensityOf, sectionText }
 
 const PLACEHOLDER = '（待填）'
-const USAGE = '用法：validate-output.mjs <产物目录> [--mode deliver|progress] [--json] [--help]'
-
-// ---------- 工具 ----------
-
-async function walkFiles(dir, base = dir, out = []) {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name)
-    if (entry.isDirectory()) await walkFiles(full, base, out)
-    else out.push({ rel: full.slice(base.length + 1).split(sep).join('/'), full })
-  }
-  return out
-}
-
-function headings(text) {
-  const list = []
-  for (const line of text.split(/\r?\n/)) {
-    const m = /^#{2,3}\s+(.+?)\s*$/.exec(line)
-    if (m) list.push(m[1])
-  }
-  return list
-}
-
-// 取某个段的正文（到下一个同级或更高级标题为止），并去掉引用块说明行。
-// 段的标题级别因模板而异：金手指是二级（## 代价与限制），专题是三级（### 定义与范围），
-// 所以按段名匹配任意级别（2-4 级），而不是写死 ###——写死 ## 时整段取不到，
-// 上层的检查就静默失效（W_NO_COST 第一版正是这样一条永不触发的检查）。
-function sectionBody(text, name) {
-  const lines = text.split(/\r?\n/)
-  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const head = lines.findIndex((l) => new RegExp(`^(#{2,4})\\s+${esc}\\s*$`).test(l))
-  if (head < 0) return null
-  const level = /^(#{2,4})/.exec(lines[head])[1].length
-  const out = []
-  for (let i = head + 1; i < lines.length; i++) {
-    const m = /^(#{1,6})\s/.exec(lines[i])
-    if (m && m[1].length <= level) break
-    if (/^>/.test(lines[i])) continue
-    out.push(lines[i])
-  }
-  return out.join('\n')
-}
-
-// 最长公共子序列长度。总表↔卷纲的重合度要用它而不是集合交集：
-// 集合会把「用词相同但说的不是一回事」也算成高重合，而 LCS 要求字按顺序对得上。
-// 长度规模是「一格 vs 一段」（几百字），一维滚动数组足够。
-function lcsLen(a, b) {
-  const x = [...a]
-  const y = [...b]
-  if (!x.length || !y.length) return 0
-  let prev = new Uint32Array(y.length + 1)
-  let cur = new Uint32Array(y.length + 1)
-  for (let i = 1; i <= x.length; i++) {
-    for (let j = 1; j <= y.length; j++) {
-      cur[j] = x[i - 1] === y[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1])
-    }
-    const t2 = prev
-    prev = cur
-    cur = t2
-    cur.fill(0)
-  }
-  return prev[y.length]
-}
-
-// 占位判定：模板写的是「（待填）」，但手写会出「待填」「(待填)」「待填 」等变体，
-// 全等匹配会漏掉这些，而漏掉的后果是「两侧都占位 → 反向重合 100% → 报成照抄」。
-function isPlaceholder(text) {
-  return typeof text === 'string' && /待填/.test(text)
-}
-
-// 第一个 Markdown 表：表头列 + 数据行。
-function firstTable(text) {
-  const lines = text.split(/\r?\n/)
-  let header = null
-  const rows = []
-  for (let i = 0; i < lines.length; i++) {
-    const cells = parseRow(lines[i])
-    if (!cells) continue
-    if (header === null) {
-      if (parseRow(lines[i + 1])?.every((c) => /^[-: ]*$/.test(c))) header = cells
-      continue
-    }
-    if (cells.every((c) => /^[-: ]*$/.test(c))) continue
-    rows.push(cells)
-  }
-  return header ? { header, rows } : null
-}
-
-// 表行解析：按未转义的竖线切列，单元格内 `\|` 是合法字面量（生成侧 buildArtifacts 的转义约定）。
-// 从幕纲「情绪基调与走向」段取出峰值强度注记（M-09）。
-//
-// 返回：
-//   null                 —— 没写峰值，或写的「无」／占位符（不算错，也不算记了）
-//   { value, ok: true }  —— 写了且在 ENUMS.峰值强度 内
-//   { value, ok: false } —— 写了但不在枚举内（调用方报 E_ENUM）
-//
-// 为什么单独抽出来：内联在校验循环里时，测试只能断「源码提到过 ENUMS.峰值强度」，
-// 而把判定换成写死的四个字后，上方错误信息里的 join(…) 仍然匹配——那种断言
-// 断的是「有没有提到」，不是「还做不做这件事」（变异实测就是这么漏的）。
-export function peakIntensityOf(toneText) {
-  const m = /峰值\s*[：:]\s*([^\n；;，,）)]{0,24})/.exec(String(toneText ?? ''))
-  if (!m) return null
-  // 先剥 Markdown 强调符：真书实测的写法是「- 幕中峰值：**爽**（第8章康履伏诛…）」。
-  // 不剥的话 val 变成「**爽**（第8章…」，startsWith 判不出来，一个填对了的产物被判非法取值。
-  // 强调符是排版，不是取值；同一条容忍也适用于反引号与下划线。
-  const raw = m[1].replace(/[*_`]/g, '').trim()
-  // 占位符要先判：正则的字符类排掉了「）」，取值会被截成「（待填」，
-  // 于是 val === '（待填）' 永远不成立，骨架态会被报成非法取值。
-  if (!raw || raw.includes('待填')) return null
-  const val = raw.replace(/[（(]\s*$/, '')
-  if (!val || /^无/.test(val)) return null
-  // 合法写法只有两种：整词（「燃」）或「枚举词＋括注」（「燃（对抗升级）」「喜/关系缓和」）。
-  // 判据是「枚举词之后要么结束、要么紧接着一个分隔符」：
-  // 用 includes 会放过「喜悦」「大爽点」；用 startsWith 会放过「喜悦」——两种都宁可放过，
-  // 而这里要的是「写了别的词就报」，因为逐章记录的同名列是用 E_ENUM 严格拒的。
-  const SEP = '（(／/、,，·—－-'
-  const ok = ENUMS.峰值强度.some((e) => val === e || (val.startsWith(e) && SEP.includes(val[e.length])))
-  return { value: val, ok }
-}
-
-export function parseRow(line) {
-  const t = line?.trim() ?? ''
-  if (!t.startsWith('|') || !t.endsWith('|')) return null
-  const cells = t.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'))
-  if (cells.length < 2) return null
-  return cells
-}
-
-// 骨架态判定：正文里是否还存在「还没填」的证据。
-// 两件事要一起看，只看一件会误判：
-//   1）散文/列表骨架——正文含「（待填）」占位（引用块里的说明行不算，那是在解释占位）；
-//   2）表格骨架——表头齐了但一行数据都没有。空的 Markdown 表格本来就没有「（待填）」字样，
-//      只按占位判会把它当成「已填」，于是满屏都是「状态未更新」的假告警（实测 6 条）。
-function looksUnfilled(text, rel) {
-  const body = text.replace(/^>.*$/gm, '')
-  if (body.includes('（待填）')) return true
-  if (!rel.endsWith('.md')) return false
-  const table = firstTable(body)
-  // 只对「整份文件就是一张表」的产物这么判（索引、台账、词典、关系表）：
-  // 有标题段落的文件里，表格为空不等于文件没写。
-  if (!table) return false
-  const headings = [...body.matchAll(/^## /gm)].length
-  if (headings > 0) return false
-  return table.rows.length === 0
-}
-
-function topicVerdict(text) {
-  const m = /-\s*判定：(.+)/.exec(text)
-  return m ? m[1].trim() : null
-}
-
-// 剧情线缺席检测（Q-22，纯函数）：chapterRows 为逐章记录的表格数据行（parseRow 解析后的单元格数组）。
-// 对在 ≥3 行出现过的每个线名（一章多线以「、」分隔），若相邻两次出现间隔 > threshold 章（按全局章号差），
-// 返回 {线名, 上次章号, 缺席章数}；缺席章数＝两次出现的全局章号差。
-export function findLineGaps(chapterRows, threshold) {
-  const cols = tableColumns('逐章记录')
-  const noIdx = cols.indexOf('全局章号')
-  const lineIdx = cols.indexOf('剧情线')
-  const seen = new Map() // 线名 → 出现章号（升序）
-  for (const row of chapterRows) {
-    const no = Number(/(\d+)/.exec(String(row?.[noIdx] ?? ''))?.[1] ?? NaN)
-    if (!Number.isFinite(no)) continue
-    const cell = String(row?.[lineIdx] ?? '').trim()
-    if (!cell || cell.includes('待填') || cell === '无') continue
-    for (const name of cell.split('、').map((s) => s.trim()).filter(Boolean)) {
-      if (!seen.has(name)) seen.set(name, [])
-      seen.get(name).push(no)
-    }
-  }
-  const gaps = []
-  for (const [name, nos] of seen) {
-    if (nos.length < 3) continue // 出现不足 3 行的线不判缺席
-    nos.sort((a, b) => a - b)
-    for (let i = 1; i < nos.length; i++) {
-      const absent = nos[i] - nos[i - 1]
-      if (absent > threshold) gaps.push({ 线名: name, 上次章号: nos[i - 1], 缺席章数: absent })
-    }
-  }
-  return gaps.sort((a, b) => a.上次章号 - b.上次章号)
-}
 
 // ---------- 主流程 ----------
-
-// 卡片字段清单：每类卡必须出现且非空的字段标签。
-// 放在模块顶层是为了能被测试 import——清单与模板脱节时（#20 把「原型词/功能位」拆成两行
-// 却没同步这里）测试才抓得到；写在函数体里就永远只能靠夹具碰巧写对。
-export const CARD_FIELDS = {
-  人物: [
-    '姓名（主名）', '别称与马甲', '归属势力', '力量/成长坐标', '首次出场章', '关键章节链',
-    '核心关系', '说话风格与人设锚点', '体貌锚点', '衣着与装束', '神态与动作锚',
-    '外在目标（要什么）', '内在缺口（缺什么）', '致命弱点（会毁在哪）',
-    // 「原型词」与「功能位」在模板里是两行（#20 把原来合并的一行拆开了）：
-    // 功能位是闭合枚举、必填；原型词自由填。这里必须按两行查——
-    // 沿用旧的合并标签「原型词/功能位」会让每一张按模板填的卡都报「缺 1 个字段标签」。
-    '原型词', '功能位',
-    '结局状态与死亡/退场章', '金句锚',
-  ],
-  势力与组织: ['名称与俗称', '性质类型', '所在地/据点', '层级结构', '成员表', '势力关系', '与主角关系及演变', '首次出场章', '关键事件章', '状态变化', '结局'],
-  地点: ['名称', '别名与真名揭示章', '所属区域', '功能与象征意义', '空间规则', '关联人物与势力', '首次出场章', '进入章', '状态轨迹'],
-  物品: ['名称', '类别', '强度等级', '能力与代价', '获得章', '经手与流转链', '象征义', '结局'],
-  概念: ['名称', '一句话定义', '首次系统阐释章', '规则细节', '上位/下位概念', '揭示节奏', '与主角的关系'],
-}
 
 export async function validateOutput({ root, mode = 'deliver' }) {
   root = resolve(root)
@@ -1093,108 +903,8 @@ export async function validateOutput({ root, mode = 'deliver' }) {
   }
 }
 
-function countFiles(dir) {
-  if (!existsSync(dir)) return 0
-  return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith('.md')).length
-}
-
-// 卷纲「事件弧清单」段的表格（Q-24）：段内第一个表；无表返回 null。
-function arcTable(volText) {
-  const lines = volText.split(/\r?\n/)
-  const idx = lines.findIndex((l) => /^#{2,3}\s+事件弧清单/.test(l))
-  if (idx === -1) return null
-  let header = null
-  const rows = []
-  for (let i = idx + 1; i < lines.length; i++) {
-    if (/^#{2,3}\s+/.test(lines[i])) break
-    const cells = parseRow(lines[i])
-    if (!cells) continue
-    if (cells.every((c) => /^[-: ]*$/.test(c))) continue
-    if (header === null) { header = cells; continue }
-    rows.push(cells)
-  }
-  return header ? { header, rows } : null
-}
-
-// 段内文本（Q-24）：`## 段名` 到下一个同级标题之间的行；段不存在返回空串。
-export function sectionText(text, name) {
-  const lines = text.split(/\r?\n/)
-  const start = lines.findIndex((l) => new RegExp(`^#{2,3}\\s+${name}\\s*$`).test(l))
-  if (start === -1) return ''
-  const out = []
-  for (let i = start + 1; i < lines.length; i++) {
-    if (/^#{2,3}\s+/.test(lines[i])) break
-    out.push(lines[i])
-  }
-  return out.join('\n')
-}
-
-function arcRows(volText) {
-  if (!/^#{2,3}\s+事件弧清单/m.test(volText)) return null // 段缺＝不判（与既有 E_ACT_COVER 语义一致）
-  return arcTable(volText)?.rows.length ?? 0
-}
-
-
-export function parseArgs(argv) {
-  const options = { root: undefined, mode: 'deliver', json: false, help: false }
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]
-    if (arg === '--mode') {
-      const v = argv[++i]
-      if (v !== 'deliver' && v !== 'progress') throw new Error(`--mode 只接受 deliver 或 progress。${USAGE}`)
-      options.mode = v
-    } else if (arg === '--json') options.json = true
-    else if (arg === '--help' || arg === '-h') options.help = true
-    else if (arg.startsWith('--')) throw new Error(`未知参数 ${arg}。${USAGE}`)
-    else if (options.root === undefined) options.root = arg
-    else throw new Error(`多余的参数 ${arg}。${USAGE}`)
-  }
-  if (!options.help && !options.root) throw new Error(USAGE)
-  return options
-}
-
 async function main() {
-  let options
-  try {
-    options = parseArgs(process.argv.slice(2))
-  } catch (error) {
-    if (process.argv.includes('--json')) {
-      console.log(JSON.stringify({ ok: false, errors: [{ code: error.code ?? 'E_ARGS', file: '', message: error.message }], data: {} }, null, 2))
-    } else {
-      console.error(error.message)
-    }
-    process.exitCode = 2
-    return
-  }
-  if (options.help) {
-    console.log(USAGE)
-    return
-  }
-  const root = resolve(options.root)
-  if (!existsSync(root) || !statSync(root).isDirectory()) {
-    console.error(`产物目录不存在：${root}`)
-    process.exitCode = 2
-    return
-  }
-  const result = await validateOutput({ root, mode: options.mode })
-  if (options.json) {
-    console.log(JSON.stringify(result, null, 2))
-  } else {
-    for (const e of result.errors) {
-      const tag = e.severity === 'warning' ? '警告' : '错误'
-      console.error(`${tag} [${e.code}] ${e.file}: ${e.message}`)
-    }
-    const d = result.data
-    console.log(`总判定：${d.verdict}（错误 ${d.errors}，警告 ${d.warnings}${modeLabel(options.mode)}）`)
-    if (options.mode === 'progress') {
-      console.log(`完成度：文件已填 ${d.files.filled}/${d.files.total}，批次 ${d.batches.done}/${d.batches.total}`)
-    }
-  }
-  if (!result.ok) process.exitCode = 1
-}
-
-function modeLabel(mode) {
-  return mode === 'progress' ? '，进度模式不阻断' : ''
+  await runCli(validateOutput)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

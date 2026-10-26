@@ -19,6 +19,7 @@
 - 长参考件补目录（P2-5）：`判据/人物提炼判据.md` 与 `解读/人物提炼解读.md` 开头加 `## 目录`，`索引.md` 由脚本重生成
 - 模板与发布字段（P3-2、P3-4）：`templates/root/AGENTS.md` 标注为手工骨架，两条禁令同步进根 AGENTS 的「禁止事项」，`package.json` 加 `files: ["skills"]`
 - AGENTS 精简（P3-3）：真书规模断言整段移入 `test/README.md`，三段英文约定收成 `## Agent 约定` 三条指针
+- 校验器拆分（P2-3b）：`validate-output.mjs` 1202→913 行，纯函数与 CLI 拆到 `validate/` 三个模块，公开导出与行为不变
 
 ### Added
 
