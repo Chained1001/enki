@@ -1,5 +1,5 @@
-// 防的漂移：基座副本的标准与源头不一致，或副本缺编号、多出文件。
-// 源头是 开发框架/规范/，只在框架仓内存在。项目复制基座后源头不在，此时只检查副本自身的结构。
+// 防的漂移：规范文件缺编号、缺结构、首行不合格式，或有标准漏登来源与偏离。
+// 规范由 Enki 自有，不再与上游逐字比对；上游只作参考，来源与偏离记在 来源.md。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
@@ -8,28 +8,39 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const copy = join(here, '..', 'docs', '规范')
-const source = join(here, '..', '..', '规范')
+const standards = join(here, '..', 'docs', '规范')
+const registryPath = join(standards, '来源.md')
 const NAME = /^\d{2}-[^/\\]+\.md$/
+const REGISTRY = '来源.md'
 
-const copyFiles = async () => (await readdir(copy)).filter((n) => n.endsWith('.md')).sort()
+const standardFiles = async () => (await readdir(standards)).filter((n) => n.endsWith('.md') && n !== REGISTRY).sort()
 
-test('副本的每个标准文件名都带两位编号，且编号从 00 起连续', async () => {
-  const names = await copyFiles()
-  assert.ok(names.length > 0, '副本中没有标准')
+test('每个标准文件名都带两位编号，且编号从 00 起连续', async () => {
+  const names = await standardFiles()
+  assert.ok(names.length > 0, '规范目录中没有标准')
   names.forEach((n, i) => {
     assert.match(n, NAME, `${n} 不符合 NN-名称.md`)
     assert.equal(Number(n.slice(0, 2)), i, `${n} 的编号应为 ${String(i).padStart(2, '0')}，编号须连续`)
   })
 })
 
-test('副本中的标准与源头逐字一致（仅在框架仓内运行：源头 ../规范 存在时）', { skip: !existsSync(source) && '项目环境中无源头，本条不适用' }, async () => {
-  const names = await copyFiles()
-  const srcNames = (await readdir(source)).filter((n) => n.endsWith('.md')).sort()
-  assert.deepEqual(names, srcNames, '副本与源头的文件清单不一致')
+test('来源.md 存在', () => {
+  assert.ok(existsSync(registryPath), 'docs/规范/来源.md 缺失')
+})
+
+test('每个标准文件都在来源.md 里逐字出现', async () => {
+  const names = await standardFiles()
+  const registry = readFileSync(registryPath, 'utf8')
   for (const n of names) {
-    const a = readFileSync(join(copy, n), 'utf8')
-    const b = readFileSync(join(source, n), 'utf8')
-    assert.equal(a, b, `${n} 与源头不一致，须同次同步`)
+    assert.ok(registry.includes(n), `${n} 未在 docs/规范/来源.md 中逐字出现`)
+  }
+})
+
+test('每个标准文件以「# NN 」开头', async () => {
+  const names = await standardFiles()
+  for (const n of names) {
+    const first = readFileSync(join(standards, n), 'utf8').split(/\r?\n/, 1)[0]
+    const prefix = `# ${n.slice(0, 2)} `
+    assert.ok(first.startsWith(prefix), `${n} 的首行应为「${prefix}<名称>」，实际为「${first}」`)
   }
 })

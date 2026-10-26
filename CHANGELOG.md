@@ -11,6 +11,7 @@
 - 脚本调用统一为 `node scripts/名称.mjs`（P0-3）：`SKILL.md` 与 8 个流程文件（01、04–10）共 26 处调用
 - 出处核验子代理字段对齐（P0-4）：`contract.mjs` 新增 `AGENT_REVIEW`（输入 6 字段 / 输出 8 字段），`agents/出处核验.md` 与 `10` 统一引用，`裁决.json` 从 5 字段改为 8 字段
 - CI 触发分支改为 `[master, main]`（P0-1），默认分支不再绕过门禁
+- 规范自有化（P1-1）：`docs/规范/来源.md` 登记来源与偏离，`standards.test` 改为结构+来源检查，上游降为参考
 
 ### Added
 

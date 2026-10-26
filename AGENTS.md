@@ -34,7 +34,7 @@
 |---|---|---|
 | `skills/` | 交付 | 唯一发布内容 |
 | `templates/` | 留存 | 派生后必留，`scripts/init-skill.mjs` 运行时读取 |
-| `docs/规范/` | 留存 | 标准副本，只读；改上游后重新复制 |
+| `docs/规范/` | 留存 | 标准正文，自有；改动走 PR 并记 `CHANGELOG.md` |
 | `scripts/`、`test/`、`evals/` | 开发 | 只服务本仓库 |
 
 性质三档：交付＝随 `npx skills add` 安装；留存＝随仓库保留但不安装；开发＝只服务本仓库。
@@ -50,6 +50,7 @@
 | 当前版本号 | `package.json` 的 `version` |
 | 变更历史 | `CHANGELOG.md` |
 | 规则 | `docs/规范/` |
+| 规范来源 | `docs/规范/来源.md` |
 | 产品契约与运行流程 | `docs/产品/PRD.md`（「产品流程」节） |
 | 段名、表头、枚举、阈值 | `skills/book-breakdown/scripts/contract.mjs` |
 | 术语 | `GLOSSARY.md` |
