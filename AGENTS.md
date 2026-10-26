@@ -55,7 +55,7 @@
 | 段名、表头、枚举、阈值 | `skills/book-breakdown/scripts/contract.mjs` |
 | 术语 | `GLOSSARY.md` |
 
-两处冲突且判不出哪处是真源时，先裁决再动手，把结果记一行到下表；没有冲突时删掉此表。
+两处冲突且判不出哪处是真源时，先裁决再动手，把裁决记进 `CHANGELOG.md` 的 `[Unreleased]`（或 `docs/adr/`）。
 
 ## 改动同步
 

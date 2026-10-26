@@ -6,6 +6,7 @@
 
 ### Changed
 
+- 事实源对账（P1-2）：GLOSSARY 去计数、PRD Q-02/Q-03 标已被 Q-76 取代、AGENTS 悬空表改指针、prepare 阈值进 THRESHOLDS、README/package 描述同步
 - 过程路径对齐（P0-2）：装置初版/回填改为 `工作/增量/阶段06-装置.md` / `工作/增量/阶段07-装置-卷N.md`，分卷片段统一为 `工作/逐章记录-卷N.md`、`工作/伏笔台账-卷N.md`、`工作/别名-卷N.md`（`工作/` 顶层），`工作/增量/裁决.json` 纳入契约
 - Q-64 的「统一到增量/」按 contract 与 merge-foreshadow 的实际口径修正
 - 脚本调用统一为 `node scripts/名称.mjs`（P0-3）：`SKILL.md` 与 8 个流程文件（01、04–10）共 26 处调用

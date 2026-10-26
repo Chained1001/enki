@@ -25,6 +25,9 @@ function currentSpecLines(text) {
     const s = l.trim()
     if (!s) return false
     if (/^\|\s*Q-\d+\s*\|/.test(s)) return false // 开放问题表的裁决记录
+    // 编号格带「（已被 Q-76 取代）」的裁决记录同样是历史（P1-2）：标注取代关系不该让它
+    // 掉进「当前规格」被按现值校验。只放行这一种括注，不放宽成任意文本。
+    if (/^\|\s*Q-\d+\s*（已被 Q-\d+ 取代）\s*\|/.test(s)) return false
     if (/^\|\s*R-\d+\s*\|/.test(s)) return false // 风险登记里会引用「曾经写错的值」作为证据
     if (/^v\d+\s/.test(s)) return false // 版本演进说明行
     return true
@@ -73,6 +76,16 @@ const CN = {
   一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10,
   十一: 11, 十二: 12, 十三: 13, 十四: 14, 十五: 15, 十六: 16, 十七: 17,
   十八: 18, 十九: 19, 二十: 20,
+}
+
+// 中文数字 → 数值（一…九十九），给「N 个固定段名」这类声明用。
+// 不写死 12：段数以 SECTIONS 为准，契约加段后这条检查跟着变，PRD 漂了才红。
+function cnNumber(text) {
+  const digit = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 }
+  if (text === '十') return 10
+  const m = /^([一二三四五六七八九])?十([一二三四五六七八九])?$/.exec(text)
+  if (m) return (m[1] ? digit[m[1]] : 1) * 10 + (m[2] ? digit[m[2]] : 0)
+  return digit[text] ?? null
 }
 
 // 从一段文本里抽出「N 列」的数字（阿拉伯或中文），返回出现过的集合。
@@ -126,6 +139,52 @@ test('PRD 声明的固定段名产物，其段数须与 contract 一致（防止
     const claimed = claimedCounts(text, name, '段')
     assert.ok(claimed.size > 0, `PRD 未写明${name}的段数（contract 为 ${actual} 段：${SECTIONS[name].join('/')}）`)
   }
+})
+
+// 「十一个固定段名」这类写法躲过了上面那条「N 段」正则——数字与「段」之间隔了「固定」两字，
+// 于是 F-08 写「十一个」而 SECTIONS.幕纲 是 12 段也没人报。段数的声明点正是这个句式
+// （F-07 卷纲／F-08 幕纲／F-21 文风），所以单列一条按中文数字解析、与契约对账。
+test('PRD 的「N 个固定段名」必须等于 contract 的段数（中文数字不许漂）', async () => {
+  const text = await readPrd()
+  const products = ['卷纲', '幕纲', '文风', '金手指', '全书大纲', '开篇三章']
+  const seen = new Map()
+  for (const line of text.split(/\r?\n/)) {
+    const m = /([一二三四五六七八九十]+)\s*个固定段名/.exec(line)
+    if (!m) continue
+    // 排除量词用法：「缺一个固定段名」「少一个」说的是有无，不是段数（M-02 就这么写）。
+    if (/[缺少差]\s*$/.test(line.slice(0, m.index))) continue
+    const n = cnNumber(m[1])
+    assert.ok(n, `认不出中文数字「${m[1]}」`)
+    // 取数字之前最近的产物名：F-08 同一行还提到卷纲（「对应段改填卷纲弧号」），
+    // 但被声明的是紧挨着数字的那个。
+    let product = null
+    let at = -1
+    for (const p of products) {
+      const i = line.lastIndexOf(p, m.index)
+      if (i > at) { at = i; product = p }
+    }
+    assert.ok(product, `「${m[0]}」所在行找不到产物名：${line.trim()}`)
+    assert.equal(n, SECTIONS[product].length,
+      `PRD 说${product}是「${m[1]}」（${n}）个固定段名，contract 实际 ${SECTIONS[product].length} 段：${SECTIONS[product].join('/')}`)
+    seen.set(product, n)
+  }
+  // 声明点被删掉时这条检查会静默失效，故三种产物必须各留一处
+  for (const p of ['卷纲', '幕纲', '文风']) {
+    assert.ok(seen.has(p), `PRD 找不到「${p}」的「N 个固定段名」声明——声明段数的写法不能悄悄消失`)
+  }
+})
+
+// Q 编号是决策的永久标识：撞号会让「见 Q-xx」指向两条不同裁决（实测末尾曾多抄一条 Q-59）。
+test('开放问题的 Q 编号不得重复', async () => {
+  const text = await readPrd()
+  const ids = []
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^\|\s*(Q-\d+)/.exec(line)
+    if (m) ids.push(m[1])
+  }
+  assert.ok(ids.length > 0, '开放问题表里找不到 Q 编号行')
+  const dup = [...new Set(ids.filter((id, i) => ids.indexOf(id) !== i))]
+  assert.deepEqual(dup, [], `Q 编号重复：${dup.join('、')}`)
 })
 
 test('PRD 的「非目标」节存在且写明不做拆解报告', async () => {

@@ -2,7 +2,7 @@
   "name": "enki",
   "version": "0.3.0",
   "private": true,
-  "description": "小说拆书技能包：按章摘要与写作要素抽取",
+  "description": "整本小说结构化拆解（默认）与章节摘要报告",
   "license": "MIT",
   "repository": {
     "type": "git",

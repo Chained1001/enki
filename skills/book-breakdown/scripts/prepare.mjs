@@ -179,7 +179,7 @@ export function detectChapters(text) {
   // 超长章标记（spike 卡壳 2：末章混入完本感言/番外/附录时 chars 异常，供批处理预警）。
   const units = chapters.filter((c) => c.isHeading)
   const avg = units.reduce((s, c) => s + c.chars, 0) / (units.length || 1)
-  const longThreshold = Math.max(30000, avg * 8)
+  const longThreshold = Math.max(THRESHOLDS.超长章字数下限, avg * THRESHOLDS.超长章相对均章倍数)
   for (const c of chapters) if (c.chars > longThreshold) c.outlier = true
 
   // 短章合并（D-13）：按合并前的正文章数判断；合并后跌破护栏则回退（评审 P9）。
@@ -622,7 +622,7 @@ export function splitAppendix(chapters) {
   // 均值剔除候选章自身，否则异常章会把自己的阈值抬高（自我抵消）。
   const others = chapters.filter((c) => c.isHeading && c !== last)
   const avg = others.reduce((s, c) => s + c.chars, 0) / (others.length || 1)
-  if (last.chars <= Math.max(30000, avg * 8)) return null
+  if (last.chars <= Math.max(THRESHOLDS.超长章字数下限, avg * THRESHOLDS.超长章相对均章倍数)) return null
   const lines = last.text.split(/\r?\n/)
   const idx = lines.findIndex((l) => APPENDIX_MARKER.test(l.trim()))
   if (idx === -1) return null
