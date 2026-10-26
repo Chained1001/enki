@@ -116,7 +116,10 @@ function firstTable(text) {
 export function peakIntensityOf(toneText) {
   const m = /峰值\s*[：:]\s*([^\n；;，,）)]{0,24})/.exec(String(toneText ?? ''))
   if (!m) return null
-  const raw = m[1].trim()
+  // 先剥 Markdown 强调符：真书实测的写法是「- 幕中峰值：**爽**（第8章康履伏诛…）」。
+  // 不剥的话 val 变成「**爽**（第8章…」，startsWith 判不出来，一个填对了的产物被判非法取值。
+  // 强调符是排版，不是取值；同一条容忍也适用于反引号与下划线。
+  const raw = m[1].replace(/[*_`]/g, '').trim()
   // 占位符要先判：正则的字符类排掉了「）」，取值会被截成「（待填」，
   // 于是 val === '（待填）' 永远不成立，骨架态会被报成非法取值。
   if (!raw || raw.includes('待填')) return null
@@ -825,11 +828,16 @@ export async function validateOutput({ root, mode = 'deliver' }) {
     }
   }
 
-  // 出处（A-14）：只查条目行（列表项）。错误＝缺章号，警告＝引句密度不足。仅交付模式且已填写的文件。
+  // 出处（A-14）：只查条目行（列表项）。错误＝缺章号，警告＝引句密度不足。
   // 表格行不查：弧清单/索引等表格自带章号列，另由人工抽查（A-19）兜底。
   // 引句按文件密度报（Q-30）：真书实测按行报会在 49 个文件各报一次，等于全片报警、无辨别力。
   // 坐标行、否定式说明、分工说明与坐标段（揭示节奏/使用记录等）不进分母，见 contract.mjs 的 QUOTE_RULE。
-  if (mode === 'deliver') {
+  //
+  // **两种模式都跑**（原先只在 deliver 跑，是个洞）。块内第 841 行已跳过含「（待填）」的文件，
+  // 所以进度模式只会检查「已写完的文件」——这正是阶段自检需要的门。
+  // 只在 deliver 跑的后果可核：首轮完整跑遗留 24 条错误，其中 19 条是缺出处，
+  // 而阶段自检（progress）对它们完全无感，等于门开着。
+  if (mode === 'deliver' || mode === 'progress') {
     const excluded = ['索引.md', '人物关系.md', '伏笔台账.md', '文风.md', '作者的话.md', '分卷总表.md']
     for (const { rel, full } of actual) {
       if (!rel.startsWith('故事底本/') || !rel.endsWith('.md')) continue
@@ -890,15 +898,23 @@ export async function validateOutput({ root, mode = 'deliver' }) {
         if (/^(判定|指向|金手指名称)：/.test(body) || SOURCE_META_LABELS.test(body)) continue
         // 值为空的段标题行（「- 规则与边界：」冒号后留空、子条目另起一行）是结构不是结论。
         // 真书实测：概念卡用这个写法，标签不在白名单里，8 张卡全被判缺出处，而子条目其实逐条带了章号。
+        // 值为空的段标题行（「- 规则与边界：」冒号后留空、子条目另起一行）是结构不是结论。
+        // 真书实测：概念卡用这个写法，标签不在白名单里，8 张卡全被判缺出处，而子条目其实逐条带了章号。
         if (/^[^：:]{1,20}[：:]\s*$/.test(body)) continue
         if (/^(名称|姓名|别称|类别|类型|性质|归属|层级|据点|位置|编号|原型词|功能位|主名|实体类型|立场|首次出场|结局|定位|所属区域|一句话世界|一句话定义|对象|对象A|对象B|幕号与幕名|起止章|卷号与卷名|卷名来源|弧名|时段|章数|字数)：/.test(body)) continue
-        if (!SOURCE_PATTERN.test(t)) { missing++; if (samples.length < 3) samples.push(body.slice(0, 40)); continue }
-        // 不该有引句的行：不进口径，既不进分母也不报缺
-        if (QUOTE_RULE.negativeBare.test(body) || QUOTE_RULE.negativeValue.test(body)) continue
+        // 不该有出处的行：先判「这行要不要出处」，再判「有没有」。
+        // 原顺序反了——豁免检查放在缺出处判定之后，只影响引句覆盖率分母，
+        // 缺出处照报。首轮完整跑（长安的荔枝）里，专题的「归属声明」类行共 17 条因此被误判。
+        // 只前置**结构类**豁免；negative* 两条不前置：它们匹配「无／未／不／没有」开头的**取值**行，
+        // 前置会把「没有出处的结论」这类正常结论也放过（回归测试抓到过）。
         if (QUOTE_RULE.coordinate.test(body)) continue
         if (QUOTE_RULE.coordinateSections.includes(section)) continue
         if (QUOTE_RULE.dutyNote.test(body)) continue
+        if (QUOTE_RULE.pointerNote.test(t.trim())) continue
         if (QUOTE_RULE.enumeration(body)) continue
+        if (!SOURCE_PATTERN.test(t)) { missing++; if (samples.length < 3) samples.push(body.slice(0, 40)); continue }
+        // 带出处但确实没有引句可取的行：进分母但不报缺
+        if (QUOTE_RULE.negativeBare.test(body) || QUOTE_RULE.negativeValue.test(body)) continue
         claims += 1
         const hasQuote = QUOTE_PATTERN.test(t)
         if (hasQuote) {

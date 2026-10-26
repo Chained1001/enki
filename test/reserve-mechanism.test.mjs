@@ -88,6 +88,10 @@ test('M-09：峰值强度纯函数校验（取值合法性，不依赖完整产�
   assert.equal(peakIntensityOf('入幕：扬；出口：抑'), null, '没写峰值时返回 null，不算错')
   assert.equal(peakIntensityOf('峰值：无'), null, '写「无」等于没写，不是非法值')
   assert.equal(peakIntensityOf('峰值：（待填）'), null, '占位符跳过，别把骨架报成错')
+  // 真书实测回归：产物里按自然写法写成「**爽**（第8章…）」——强调符是排版不是取值，
+  // 不剥的话一个填对了的产物会被判非法取值（首次验证跑绍宋时踩到）。
+  assert.equal(peakIntensityOf('- 幕中峰值：**爽**（第8章康履伏诛）').ok, true, 'Markdown 加粗要剥掉再判')
+  assert.equal(peakIntensityOf('峰值：`燃`（对抗升级）').ok, true, '反引号同样要剥掉')
   // 枚举必须来自 contract，不能在这里另写一份 ['爽','燃','虐','喜']。
   // 只测「这四个词能用」是测不出来的：写死数组与读契约的行为完全一致，
   // 而「两处各写一份」正是以后会漂的起点。所以直接看函数体：它得提到 ENUMS.峰值强度。
