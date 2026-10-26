@@ -240,7 +240,7 @@ export async function validateRepo(root) {
     for (const name of skillNames) {
       const safeName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       if (!new RegExp(`^\\|\\s*${safeName}\\s*\\|`, 'm').test(readmeText)) {
-        errors.push({ code: 'E_INDEX', file: 'README.md', message: `未提及技能 ${name}，请更新技能列表` })
+        errors.push({ code: 'E_README_INDEX', file: 'README.md', message: `未提及技能 ${name}，请更新技能列表` })
       }
     }
   }
